@@ -27,15 +27,33 @@ object FieldProperty {
   * object Packet extends EventTrace.Schema(new Packet)
   * }}}
   *
-  * Field names come from the `val` names. All instances of one object type must declare the same fields.
+  * Field names come from the `val` names. All instances of one object type must declare the same fields. A handle
+  * comes from a create block, valid only inside it, or from a query over a collection.
   */
 abstract class ObjectType(val typeName: String) {
   private val declared = scala.collection.mutable.ArrayBuffer.empty[ObjectField]
 
-  /** Whether this handle's create block is running, has closed, or has not started. */
-  private[eventtrace] var scope: ObjectType.Scope = ObjectType.Unbound
+  /** What produced this handle, which decides where it may be used. */
+  private[eventtrace] var binding: Binding = Binding.Unbound
+
+  /** Handles are numbered in construction order, so a handle is always numbered after those its query refers to. */
+  private[eventtrace] val serial: Long = ObjectType.nextSerial()
 
   private[eventtrace] def fields: Seq[ObjectField] = declared.toSeq
+
+  /** Emits a record whose subject is this object on every clock edge at which the enclosing `when` conditions hold.
+    * The event is named after the object type, such as `instruction.issue`. The block's effects act on this object.
+    */
+  final def event(name: String)(body: => Unit)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.objectEvent(this, name, sourceInfo)(body)
+
+  /** Ends this object's lifetime when the open event fires. Only the event's subject may be destroyed, and it must
+    * have left every collection by then.
+    */
+  final def destroy()(implicit sourceInfo: SourceInfo): Unit = EventTrace.destroy(this, sourceInfo)
+
+  /** This object's ID: compare it in a query, or capture it as an event field, as in `"blocker" := blocker.id`. */
+  final def id: IdRef = new IdRef(this)
 
   protected def const[T <: Bits](gen: T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): BitsField =
     declare(new BitsField(this, name.value, EventTrace.typeOf(gen, None, name.value, sourceInfo), FieldProperty.Const))
@@ -58,22 +76,36 @@ abstract class ObjectType(val typeName: String) {
 }
 
 object ObjectType {
-  private[eventtrace] sealed trait Scope
-  private[eventtrace] case object Unbound extends Scope
-  private[eventtrace] case object Open extends Scope
-  private[eventtrace] case object Closed extends Scope
+  private var serials = 0L
+  private def nextSerial(): Long = { serials += 1; serials }
 }
 
-/** One field of an object handle. Assigning it inside the handle's create block records the value in the create
-  * event's record; `DontCare` declares the field without a value.
+/** One field of an object handle. Assigning it inside an event on the handle records the value in the event's
+  * record and, for an existing object, updates the object when the cycle ends; `DontCare` declares the field without
+  * a value. Inside `where`, comparing it builds a query.
   */
 sealed abstract class ObjectField(
   private[eventtrace] val owner:    ObjectType,
   val name:                         String,
   private[eventtrace] val tpe:      FieldType,
-  private[eventtrace] val property: FieldProperty) {
+  private[eventtrace] val property: FieldProperty)
+    extends Key {
+
+  private[eventtrace] def operand: Operand = Operand.Field(owner, this)
 
   def :=(value: DontCare.type)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignField(this, None, sourceInfo)
+
+  protected def compare(op: CompareOp, that: Data)(implicit sourceInfo: SourceInfo): Pred =
+    Pred.Compare(op, operand, Queries.value(tpe, that, s"${owner.typeName}.$name ${op.written}", sourceInfo))
+
+  protected def compare(op: CompareOp, that: ObjectField)(implicit sourceInfo: SourceInfo): Pred = {
+    if (that.tpe.signed != tpe.signed)
+      EventTrace.elaborationError(
+        s"${owner.typeName}.$name ${op.written} compares a ${tpe.typeName} field with a ${that.tpe.typeName} field",
+        sourceInfo
+      )
+    Pred.Compare(op, operand, that.operand)
+  }
 }
 
 /** A `Bool`, `UInt`, or `SInt` field. A narrower value is extended; a wider one, or a mix of `UInt` and `SInt`, is an
@@ -82,12 +114,40 @@ sealed abstract class ObjectField(
 final class BitsField private[eventtrace] (owner: ObjectType, name: String, tpe: FieldType, property: FieldProperty)
     extends ObjectField(owner, name, tpe, property) {
   def :=(value: Bits)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignField(this, Some(value), sourceInfo)
+
+  def ===(that: Bits)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Eq, that)
+  def =/=(that: Bits)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ne, that)
+  def <(that: Bits)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Lt, that)
+  def <=(that: Bits)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Le, that)
+  def >(that: Bits)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Gt, that)
+  def >=(that: Bits)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ge, that)
+
+  def ===(that: BitsField)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Eq, that)
+  def =/=(that: BitsField)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ne, that)
+  def <(that: BitsField)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Lt, that)
+  def <=(that: BitsField)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Le, that)
+  def >(that: BitsField)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Gt, that)
+  def >=(that: BitsField)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ge, that)
 }
 
-/** A `ChiselEnum` field; its static type admits only values of the same enum. */
+/** A `ChiselEnum` field; its static type admits only values of the same enum. Ordering compares variant values. */
 final class EnumField[T <: EnumType] private[eventtrace] (owner: ObjectType, name: String, tpe: FieldType, property: FieldProperty)
     extends ObjectField(owner, name, tpe, property) {
   def :=(value: T)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignField(this, Some(value), sourceInfo)
+
+  def ===(that: T)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Eq, that)
+  def =/=(that: T)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ne, that)
+  def <(that: T)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Lt, that)
+  def <=(that: T)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Le, that)
+  def >(that: T)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Gt, that)
+  def >=(that: T)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ge, that)
+
+  def ===(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Eq, that)
+  def =/=(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ne, that)
+  def <(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Lt, that)
+  def <=(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Le, that)
+  def >(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Gt, that)
+  def >=(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ge, that)
 }
 
 /** The companion of an object type, which creates objects: `Packet.create(event = "arrive") { p => ... }`. */

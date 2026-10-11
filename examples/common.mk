@@ -41,7 +41,8 @@ $(RTL): $(SCALA_SOURCES) $(EVENTTRACE_DIR)/build.sbt
 
 # Verilator 5.022 intermittently aborts with "attempted to destroy locked Thread Pool" when
 # verilation itself runs multithreaded (-j 0), so only the C++ build is parallel.
-$(SIM): $(RTL) TestTop.sv $(DPI_ADAPTER) $(RUNTIME_SRCS) $(RUNTIME_DIR)/eventtrace/runtime.h
+$(SIM): $(RTL) TestTop.sv $(DPI_ADAPTER) $(RUNTIME_SRCS) $(RUNTIME_DIR)/eventtrace/runtime.h \
+		$(RUNTIME_DIR)/eventtrace/tracker.h
 	verilator --main --timing --cc --exe --build --build-jobs 0 --verilate-jobs 1 -Wno-fatal \
 		--top-module TestTop -Mdir $(BUILD_DIR)/obj_dir -CFLAGS "-I$(RTL_DIR) -I$(RUNTIME_DIR)" \
 		TestTop.sv $(RTL_DIR)/*.sv $(DPI_ADAPTER) $(RUNTIME_SRCS)

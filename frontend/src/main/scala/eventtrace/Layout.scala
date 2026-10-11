@@ -2,12 +2,27 @@ package eventtrace
 
 import chisel3.experimental.BaseModule
 
-/** A field's type as consumers see it; `enumDef` is set for a `ChiselEnum` field. */
-private[eventtrace] case class FieldType(width: Int, signed: Boolean, isBool: Boolean, enumDef: Option[EnumDef]) {
-  def kind: String = if (enumDef.isDefined) "Enum" else if (isBool) "Bool" else if (signed) "SInt" else "UInt"
+/** A field's type as consumers see it; `enumDef` is set for a `ChiselEnum` field, and `idOf` names the object type
+  * of a captured object ID.
+  */
+private[eventtrace] case class FieldType(
+  width:   Int,
+  signed:  Boolean,
+  isBool:  Boolean,
+  enumDef: Option[EnumDef],
+  idOf:    Option[String] = None) {
+  def kind: String =
+    if (idOf.isDefined) "Id" else if (enumDef.isDefined) "Enum" else if (isBool) "Bool" else if (signed) "SInt" else "UInt"
 
   /** What sites sharing an event name must agree on: an enum field's enum, not merely its width. */
-  def typeName: String = enumDef.map(_.name).getOrElse(if (isBool) "Bool" else s"$kind<$width>")
+  def typeName: String =
+    idOf.map(t => s"Id<$t>").orElse(enumDef.map(_.name)).getOrElse(if (isBool) "Bool" else s"$kind<$width>")
+}
+
+private[eventtrace] object FieldType {
+
+  /** The ID of an object of type `objectType`, which the runtime counts in 64 bits. */
+  def id(objectType: String): FieldType = FieldType(64, signed = false, isBool = false, None, Some(objectType))
 }
 
 /** Where a field's value comes from when a record is decoded. */
@@ -22,6 +37,9 @@ private[eventtrace] case class Constant(value: BigInt) extends FieldSource
 /** Left `DontCare` at this site, so absent from its records. */
 private[eventtrace] case object Absent extends FieldSource
 
+/** The ID of the object `handle` resolves to, which the runtime supplies. */
+private[eventtrace] case class Reference(handle: ObjectType) extends FieldSource
+
 /** One field of a site. An event-local field left `DontCare` has no type until [[EventSchema.resolve]] takes it from
   * a site sharing its event name.
   */
@@ -31,6 +49,7 @@ private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType],
   def signed: Boolean = resolved.signed
   def isBool: Boolean = resolved.isBool
   def enumDef: Option[EnumDef] = resolved.enumDef
+  def idOf: Option[String] = resolved.idOf
   def kind: String = resolved.kind
   def typeName: String = tpe.map(_.typeName).getOrElse("DontCare")
 }
@@ -40,7 +59,8 @@ private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType],
   *
   * @param written   the event name as written at the site, such as `arrive`
   * @param subject   the subject's object type, such as `packet`, for an event with a subject
-  * @param lifecycle `create` for a create event
+  * @param lifecycle `create` for a create event, `destroy` for one that destroys its subject
+  * @param plan      how the runtime handles the site's records, for an event with a subject or a captured ID
   */
 private[eventtrace] case class SiteLayout(
   id:           Int,
@@ -50,7 +70,8 @@ private[eventtrace] case class SiteLayout(
   location:     String,
   fields:       Seq[FieldLayout],
   payloadWords: Int,
-  module:       BaseModule) {
+  module:       BaseModule,
+  plan:         Option[SitePlan] = None) {
 
   /** The event's name as consumers see it: `packet.arrive` for an event with a subject, else as written. */
   def name: String = SiteLayout.qualifiedName(subject, written)
@@ -59,6 +80,27 @@ private[eventtrace] case class SiteLayout(
     * when every parent has named its children.
     */
   def instance: String = module.pathName
+}
+
+/** What a site's handler does besides decoding its fields: resolve handles, then apply effects to the subject.
+  *
+  * @param subject  the subject, if any: a create block's new object, a chosen object, or each member of a view
+  * @param handles  every handle the site resolves, the subject among them, in construction order, so that each
+  *                 comes after the handles its query refers to
+  * @param operands the hardware values its queries compare with, and the bit where each starts in the payload
+  * @param assigned the subject's fields this site assigns a value, which are also record fields
+  * @param effects  membership changes and destruction, in the order written
+  */
+private[eventtrace] case class SitePlan(
+  subject:  Option[HandlePlan],
+  handles:  Seq[HandlePlan],
+  operands: Seq[(Operand.Hardware, Int)],
+  assigned: Seq[ObjectField],
+  effects:  Seq[Effect])
+
+/** One handle a site resolves, as bound when the site was elaborated. */
+private[eventtrace] case class HandlePlan(handle: ObjectType, binding: Binding) {
+  def typeName: String = handle.typeName
 }
 
 private[eventtrace] object SiteLayout {

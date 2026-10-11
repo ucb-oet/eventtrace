@@ -22,9 +22,13 @@ private[eventtrace] object ManifestGen {
   def json(events: Seq[EventSchema], sites: Seq[SiteLayout]): String = {
     val entries = events.map { e =>
       val fields = e.fields.map { f =>
-        val enumName = f.enumDef.map(d => s""", "enum": ${quote(d.name)}""").getOrElse("")
+        // An object ID names its object type instead of a width.
+        val detail = f.idOf match {
+          case Some(t) => s""", "object": ${quote(t)}"""
+          case None    => f.enumDef.map(d => s""", "enum": ${quote(d.name)}""").getOrElse("") + s""", "width": ${f.width}"""
+        }
         val optional = if (e.optional(f.name)) """, "optional": true""" else ""
-        s"""        {"name": ${quote(f.name)}, "type": "${f.kind}"$enumName, "width": ${f.width}$optional}"""
+        s"""        {"name": ${quote(f.name)}, "type": "${f.kind}"$detail$optional}"""
       }
       val fieldList = if (fields.isEmpty) "[]" else fields.mkString("[\n", ",\n", "\n      ]")
       val subject = e.subject.map(s => s"""\n      "subject": ${quote(s)},""").getOrElse("")

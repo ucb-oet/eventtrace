@@ -11,8 +11,9 @@ static_assert(std::is_same<svBitVecVal, uint32_t>::value, "payload words must be
 
 namespace {
 
-eventtrace::Runtime runtime(&eventtrace::sites::dispatch, eventtrace::sites::kPayloadWords,
-                            eventtrace::sites::kSiteCount, eventtrace::sites::kObjectTypeCount);
+// The tracker is constructed first, since the runtime asks it for the site table.
+eventtrace::sites::Tracker tracker;
+eventtrace::Runtime runtime(tracker);
 
 }  // namespace
 

@@ -1,0 +1,88 @@
+# Collections check: every record, in order, matches a model of the pipeline exactly.
+# Run as: awk -f check.awk eventtrace_manifest.json run.log
+#
+# Records come from edges 3 to 62, where the counter k is the edge minus 3, from 0 to 59. The model keeps the
+# pipeline registers and which instruction each stage holds. Instructions join the collection when created, so join
+# order is ID order, and before each edge the collection holds exactly the instructions in writeback, execute, and
+# decode, oldest first. Within a cycle, records follow site order, and each site's records follow its view's order.
+function fail(message) {
+  print "FAIL: " message
+  bad = 1
+}
+
+# One expected record of instruction `id` at site `site`; `fields` are its fields sorted by name, if any.
+function emit(site, name, id, fields) {
+  want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d instruction.%s subject=instruction#%d%s",
+                    k + 3, m, site, name, id, fields == "" ? "" : " " fields)
+  m++
+  seen[name]++
+}
+
+FNR == NR {
+  manifest = manifest $0 "\n"
+  next
+}
+
+/^eventtrace / { got[n++] = $0 }
+
+END {
+  m = 0; next_id = 0
+  decV = 0; exeV = 0; wbV = 0; was_stalled = 0
+  for (k = 0; k <= 59; k++) {
+    kill  = exeV && k % 11 == 5
+    stall = decV && exeV && !kill && k % 7 == 3
+    issue = decV && !stall && !kill
+    enter = !stall && !kill
+
+    # The collection before the edge, in join order.
+    members = 0
+    if (wbV)  member[members++] = wbId
+    if (exeV) member[members++] = exeId
+    if (decV) member[members++] = decId
+
+    if (enter) { new_id = next_id++; emit(0, "decode", new_id, sprintf("odd=%d pc=%d stage=Decode", k % 2, k)) }
+    if (issue) emit(1, "issue", decId, "stage=Execute")
+    if (exeV)  emit(2, "writeback", exeId, sprintf("result=%d stage=Writeback", (exePc + 1) % 256))
+    if (wbV)   emit(3, "retire", member[0], "")
+    if (kill && decV) emit(4, "squash", decId, sprintf("by=instruction#%d", exeId))
+    if (stall && !was_stalled) emit(5, "stall", decId, sprintf("blocker=instruction#%d", exeId))
+    if (k % 5 == 0) {
+      for (pass = 0; pass <= 1; pass++)
+        for (odd = 0; odd <= 1; odd++)
+          for (i = 0; i < members; i++)
+            if (pc[member[i]] % 2 == odd) emit(6 + pass, "sample", member[i], "pass=" pass)
+    }
+    if (k % 4 == 2 && members >= 2) {
+      emit(8, "second", member[1], "")
+      emit(9, "youngest", member[members - 1], "")
+    }
+
+    # The edge.
+    if (enter) pc[new_id] = k
+    wbV = exeV; wbId = exeId
+    exeV = issue; exeId = decId; exePc = decPc
+    decV = !kill
+    if (enter) { decId = new_id; decPc = k }
+    was_stalled = stall
+  }
+
+  if (n != m) fail("expected " m " records, got " n)
+  for (i = 0; i < m && i < n; i++)
+    if (got[i] != want[i]) { fail("record " i ": expected \"" want[i] "\", got \"" got[i] "\""); break }
+
+  split("\"name\": \"instruction.retire\",|\"lifecycle\": \"destroy\",|" \
+        "{\"name\": \"blocker\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
+        "{\"name\": \"stage\", \"type\": \"Enum\", \"enum\": \"Stage\", \"width\": 2}|" \
+        "{\"name\": \"Stage\", \"values\": {\"Decode\": 0, \"Execute\": 1, \"Writeback\": 2}}", entries, "|")
+  for (i in entries)
+    if (!index(manifest, entries[i])) fail("the manifest lacks " entries[i])
+  split("decode issue writeback retire squash stall sample second youngest", names, " ")
+  for (i in names)
+    if (!seen[names[i]]) fail("the model never expects instruction." names[i] ", so the run does not cover it")
+
+  if (bad) exit 1
+  print "PASS: " n " records match the pipeline model exactly: " seen["decode"] " instructions created, " \
+    seen["retire"] " retired and " seen["squash"] " squashed through queries on one collection, " seen["stall"] \
+    " stalls naming their blockers, and " seen["sample"] " samples in ranked order"
+}
