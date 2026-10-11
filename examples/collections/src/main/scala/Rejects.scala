@@ -23,10 +23,9 @@ class Chooser(active: EventTrace.Collection[Instruction]) extends Module {
   val chosen = active.where(_.pc === pc).only
 }
 
-/** Passes only if each design fails to elaborate with its expected error. Event names are unique across cases,
-  * since the frontend remembers every site across elaborations.
-  */
+/** Passes only if each design fails to elaborate with its expected error. */
 object Rejects extends App {
+  EventTrace.enable()
   private def design(body: (UInt, SInt, EventTrace.Collection[Instruction]) => Unit): () => RawModule =
     () => new Case(body)
 

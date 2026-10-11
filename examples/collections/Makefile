@@ -19,9 +19,9 @@ $(MISUSE_DIR)/eventtrace_sites.h: $(SCALA_SOURCES) $(EVENTTRACE_DIR)/build.sbt
 	rm -rf $(MISUSE_DIR)
 	cd $(EVENTTRACE_DIR) && $(SBT) "$(SBT_PROJECT)/runMain eventtrace.examples.collections.MisuseMain $(MISUSE_DIR)/"
 
-$(VIOLATIONS): violations.cc $(MISUSE_DIR)/eventtrace_sites.h $(RUNTIME_SRCS) $(RUNTIME_DIR)/eventtrace/runtime.h \
-		$(RUNTIME_DIR)/eventtrace/tracker.h
-	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(MISUSE_DIR) -I$(RUNTIME_DIR) -o $@ violations.cc $(RUNTIME_SRCS)
+# Elaboration writes the runtime next to the generated header, as for a simulation; only the DPI adapter is left out.
+$(VIOLATIONS): violations.cc $(MISUSE_DIR)/eventtrace_sites.h
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(MISUSE_DIR) -o $@ violations.cc $(MISUSE_DIR)/eventtrace_runtime.cc
 
 check-violations: $(VIOLATIONS)
 	$(VIOLATIONS)

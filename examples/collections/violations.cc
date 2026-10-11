@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "eventtrace/runtime.h"
+#include "eventtrace_runtime.h"
 #include "eventtrace_sites.h"  // Generated from Misuse.scala.
 
 namespace {
@@ -47,6 +47,7 @@ bool run(const Scenario& s) {
     dup2(err[1], 2);
     eventtrace::sites::Tracker tracker;
     eventtrace::Runtime runtime(tracker);
+    runtime.open("/dev/stdout");
     for (std::size_t cycle = 0; cycle < s.cycles.size(); ++cycle)
       for (const std::string& name : s.cycles[cycle]) runtime.accept(static_cast<long long>(cycle), site(name), nullptr, 0);
     runtime.finish();

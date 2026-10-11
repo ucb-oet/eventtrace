@@ -1,4 +1,4 @@
-#include "eventtrace/runtime.h"
+#include "eventtrace_runtime.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -9,7 +9,14 @@ namespace eventtrace {
 
 Runtime::Runtime(Sites& sites) : sites_(sites), next_object_ids_(sites.object_type_count(), 0) {}
 
+void Runtime::open(const char* path) {
+  if (out_) return;
+  out_ = std::fopen(path, "w");
+  if (!out_) fail("cannot open %s for the trace records", path);
+}
+
 void Runtime::accept(long long cycle, unsigned site, const uint32_t* payload, unsigned words) {
+  if (!out_) return;
   if (finished_) fail("record from site %u at cycle %lld arrived after the stream ended", site, cycle);
   if (site >= sites_.site_count()) fail("record from unknown site %u at cycle %lld", site, cycle);
   if (words != sites_.payload_words(site))
@@ -28,7 +35,7 @@ void Runtime::finish() {
   if (finished_) return;
   flush();
   finished_ = true;
-  std::fflush(stdout);
+  if (out_) std::fflush(out_);
 }
 
 void Runtime::flush() {
@@ -46,7 +53,7 @@ void Runtime::flush() {
 }
 
 void Runtime::violation(unsigned site, const char* format, ...) const {
-  std::fflush(stdout);
+  if (out_) std::fflush(out_);
   std::fprintf(stderr, "eventtrace: %s at site %u (cycle %lld): ", sites_.site_name(site), site, cycle_);
   va_list args;
   va_start(args, format);
@@ -57,7 +64,7 @@ void Runtime::violation(unsigned site, const char* format, ...) const {
 }
 
 void Runtime::fail(const char* format, ...) const {
-  std::fflush(stdout);
+  if (out_) std::fflush(out_);
   std::fputs("eventtrace: ", stderr);
   va_list args;
   va_start(args, format);

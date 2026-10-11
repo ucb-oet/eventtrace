@@ -2,10 +2,10 @@ package eventtrace
 
 import chisel3._
 import chisel3.experimental.{BaseModule, SourceInfo, SourceLine}
-import chisel3.internal.eventtrace.WhenDepth
+import chisel3.internal.eventtrace.{Elaboration, WhenDepth}
 import chisel3.util.Cat
+import firrtl.transforms.BlackBoxInlineAnno
 
-import java.nio.file.Path
 import scala.collection.mutable
 import scala.util.DynamicVariable
 
@@ -78,18 +78,54 @@ object EventTrace {
 
   /** Set while an event reads its enable from `when.cond`, which evaluates every enclosing condition again. */
   private[eventtrace] val computingEnable = new DynamicVariable(false)
-  private val siteLayouts = mutable.ArrayBuffer.empty[SiteLayout]
 
-  /** Every enum used so far, by simple name, which generated C++ and the manifest use. */
-  private val enums = mutable.LinkedHashMap.empty[String, (ChiselEnum, EnumDef)]
+  /** What one elaboration has declared. A program may elaborate several designs, as the rejection tests do; each
+    * starts afresh, so its site IDs count from 0 and its generated files describe only its own sites.
+    */
+  private class Declarations(val elaboration: AnyRef) {
+    val siteLayouts = mutable.ArrayBuffer.empty[SiteLayout]
 
-  /** Every object type used so far: its fields, their signature, and where it was first used. */
-  private val objectTypes = mutable.LinkedHashMap.empty[String, ObjectTypeInfo]
+    /** Every enum used so far, by simple name, which generated C++ and the manifest use. */
+    val enums = mutable.LinkedHashMap.empty[String, (ChiselEnum, EnumDef)]
 
-  private val collections = mutable.ArrayBuffer.empty[CollectionInfo]
+    /** Every object type used so far: its fields, their signature, and where it was first used. */
+    val objectTypes = mutable.LinkedHashMap.empty[String, ObjectTypeInfo]
+
+    val collections = mutable.ArrayBuffer.empty[CollectionInfo]
+
+    /** Whether a sink carries the generated files yet; see [[carryFiles]]. */
+    var carried = false
+  }
+
+  private var latest: Option[Declarations] = None
+
+  /** The current elaboration's declarations. */
+  private def declarations: Declarations = {
+    val elaboration = Elaboration.current()
+    latest.filter(_.elaboration eq elaboration).getOrElse {
+      val fresh = new Declarations(elaboration)
+      latest = Some(fresh)
+      fresh
+    }
+  }
+
+  private def siteLayouts = declarations.siteLayouts
+  private def enums = declarations.enums
+  private def objectTypes = declarations.objectTypes
+  private def collections = declarations.collections
+
+  private var tracing = false
+
+  /** Turns tracing on, or off with `on = false`, for what is elaborated next.
+    *
+    * Tracing is off until a flow turns it on, so generators can carry annotations at no cost to builds that do not
+    * trace: event and create blocks are not even run, and no sink is built. Annotation mistakes therefore surface
+    * only in traced builds. In Chipyard, a config with `WithEventTrace` turns tracing on.
+    */
+  def enable(on: Boolean = true): Unit = tracing = on
 
   /** Emits a record on every clock edge at which the enclosing `when` conditions hold. */
-  def event(name: String)(body: => Unit)(implicit sourceInfo: SourceInfo): Unit = {
+  def event(name: String)(body: => Unit)(implicit sourceInfo: SourceInfo): Unit = if (tracing) {
     val what = s"""EventTrace.event("$name")"""
     checkEventName(what, name, sourceInfo)
     if (CppGen.ReservedEventNames.contains(name))
@@ -121,7 +157,7 @@ object EventTrace {
   }
 
   /** Runs a create block for `handle`; see [[Schema.create]]. */
-  private[eventtrace] def createSite(handle: ObjectType, event: String, sourceInfo: SourceInfo)(body: => Unit): Unit = {
+  private[eventtrace] def createSite(handle: ObjectType, event: String, sourceInfo: SourceInfo)(body: => Unit): Unit = if (tracing) {
     val what = s"""create of "${handle.typeName}.$event""""
     checkEventName(what, event, sourceInfo)
     registerObjectType(handle, sourceInfo)
@@ -131,7 +167,7 @@ object EventTrace {
   }
 
   /** Runs an event block whose subject is an existing object; see [[ObjectType.event]]. */
-  private[eventtrace] def objectEvent(handle: ObjectType, event: String, sourceInfo: SourceInfo)(body: => Unit): Unit = {
+  private[eventtrace] def objectEvent(handle: ObjectType, event: String, sourceInfo: SourceInfo)(body: => Unit): Unit = if (tracing) {
     val what = s"""${handle.typeName}.event("$event")"""
     checkEventName(what, event, sourceInfo)
     checkHandle(what, handle, sourceInfo)
@@ -140,7 +176,7 @@ object EventTrace {
   }
 
   /** Runs an `each` block with `member` standing for every member of `view`; see [[View.each]]. */
-  private[eventtrace] def each[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit = {
+  private[eventtrace] def each[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit = if (tracing) {
     if (openEach.value.isDefined) elaborationError("each is nested inside another each block, which is not supported", sourceInfo)
     if (openEvent.value.isDefined)
       elaborationError("each is inside an event block; put the events inside the each block instead", sourceInfo)
@@ -173,20 +209,42 @@ object EventTrace {
   def capture(name: String, value: DontCare.type)(implicit sourceInfo: SourceInfo): Unit =
     addCapture(name, sourceInfo)(_ => Entry(name, Unset, None, None))
 
-  /** Writes the generated C++ and the manifest for every site elaborated so far into `dir`.
+  /** The manifest of the most recent elaboration, as JSON: what consumers see, for tools outside the simulator.
     *
-    * Call it after elaboration has finished: sites' instance paths are only known then, and an event-local field
-    * left `DontCare` takes its type from sites that may elaborate after it.
+    * It describes the design rather than being compiled into the simulator, so each flow writes it with its other
+    * descriptions of the design once elaboration has finished. Chipyard registers it with rocket-chip's
+    * `ElaborationArtefacts`, which builds each file after elaboration and writes it next to the `.dts`; other flows
+    * write it after elaborating. Sites' instance paths, and the types of event-local fields left `DontCare` at some
+    * sites, are only known once elaboration has finished.
     */
-  def emitGenerated(dir: String): Seq[Path] = {
-    val sites = EventSchema.resolve(siteLayouts.toSeq) match {
+  def manifest: String = {
+    val sites = latest.map(resolvedSites).getOrElse(Seq.empty)
+    ManifestGen.json(EventSchema.fromSites(sites), sites)
+  }
+
+  /** Every site of an elaboration, each event-local field left `DontCare` taking its type from the other sites. */
+  private def resolvedSites(d: Declarations): Seq[SiteLayout] =
+    EventSchema.resolve(d.siteLayouts.toSeq) match {
       case Right(typed)   => typed
       case Left(untyped) => throw new IllegalArgumentException(untyped.mkString("; "))
     }
-    Seq(
-      CppGen.write(dir, sites, objectTypes.values.toSeq, collections.toSeq),
-      ManifestGen.write(dir, EventSchema.fromSites(sites), sites)
-    )
+
+  /** The runtime and DPI adapter, shipped in the frontend's resources. */
+  private val RuntimeSources = Seq("eventtrace_runtime.h", "eventtrace_runtime.cc", "eventtrace_tracker.h", "eventtrace_dpi.cc")
+
+  /** Makes the elaboration's first sink carry everything the simulator compiles besides the RTL: the runtime sources
+    * and the generated C++. firtool writes them next to the RTL, as it does any black box's files, so no step has to
+    * run after elaboration, in Chipyard or elsewhere.
+    *
+    * The generated C++ must wait until elaboration has finished, for the same reasons as [[manifest]]. Chisel builds
+    * an annotation's contents only then, when it converts the finished circuit.
+    */
+  private def carryFiles(sink: EventTraceSink, d: Declarations): Unit = {
+    RuntimeSources.foreach(f => sink.addResource(s"/eventtrace/csrc/$f"))
+    chisel3.experimental.annotate(sink) {
+      val sites = resolvedSites(d)
+      Seq(BlackBoxInlineAnno(sink.toNamed, CppGen.FileName, CppGen.header(sites, d.objectTypes.values.toSeq, d.collections.toSeq)))
+    }
   }
 
   object syntax {
@@ -268,6 +326,11 @@ object EventTrace {
     sink.enable := enable
     val transmitted = packed.map(_._2.asUInt) ++ queryValues.map(_.value.asUInt)
     sink.payload.foreach(_ := Cat(transmitted.reverse.toSeq))
+    val d = declarations
+    if (!d.carried) {
+      d.carried = true
+      carryFiles(sink, d)
+    }
     siteLayouts += SiteLayout(siteId, written, subject.map(_.typeName), lifecycle, location(sourceInfo), fields, payloadWords,
       module, plan)
 

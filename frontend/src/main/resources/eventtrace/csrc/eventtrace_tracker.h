@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "eventtrace/runtime.h"
+#include "eventtrace_runtime.h"
 
 namespace eventtrace {
 

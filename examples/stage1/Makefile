@@ -10,3 +10,9 @@ include ../common.mk
 check: check-rejects
 check-rejects:
 	cd $(EVENTTRACE_DIR) && $(SBT) "$(SBT_PROJECT)/runMain eventtrace.examples.stage1.Rejects"
+
+# With tracing left off, which is the default, the same design must elaborate no sinks.
+.PHONY: check-disabled
+check: check-disabled
+check-disabled:
+	cd $(EVENTTRACE_DIR) && $(SBT) "$(SBT_PROJECT)/runMain eventtrace.examples.stage1.Disabled"

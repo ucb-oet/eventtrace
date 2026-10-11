@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "eventtrace/runtime.h"
+#include "eventtrace_runtime.h"
 
 namespace {
 
@@ -52,6 +52,14 @@ int main() {
   FakeSites sites;
   eventtrace::Runtime runtime(sites);
 
+  // Without +eventtrace=<path>, no file is open, and records are ignored. Only the first open counts, so the second,
+  // whose directory does not exist, does nothing.
+  runtime.accept(3, 0, nullptr, 0);
+  runtime.accept(4, 0, nullptr, 0);
+  expect(sites.handled.empty() && sites.commits.empty(), "records are ignored until a file is open");
+  runtime.open("/dev/null");
+  runtime.open("/nonexistent/eventtrace.log");
+
   // Cycle 5 arrives as sites 3, 0, 2; cycle 6 as 1, 3. The payload buffer is reused, as a simulator's would be.
   uint32_t buffer[2];
   buffer[0] = 30; buffer[1] = 31; runtime.accept(5, 3, buffer, 2);
@@ -77,7 +85,8 @@ int main() {
   }
   expect(sites.commits == std::vector<long long>({5, 6}), "each cycle is committed once, after its records");
   if (failures) return 1;
-  std::printf("PASS: records are handled in (cycle, site) order with event IDs 0 to 4, each object type numbers its "
-              "objects from 0, payloads are copied, each cycle commits once, and finish() is idempotent\n");
+  std::printf("PASS: records are ignored until a file is open, records are handled in (cycle, site) order with "
+              "event IDs 0 to 4, each object type numbers its objects from 0, payloads are copied, each cycle commits "
+              "once, and open() and finish() are idempotent\n");
   return 0;
 }

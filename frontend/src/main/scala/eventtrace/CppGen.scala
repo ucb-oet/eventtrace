@@ -1,8 +1,5 @@
 package eventtrace
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path, Paths}
-
 /** Generates the C++ half of the runtime, in three namespaces:
   *
   *  - `eventtrace::generated`: what consumers see, with names exactly as written. One struct per event name, with
@@ -26,13 +23,6 @@ private[eventtrace] object CppGen {
 
   /** Names that event structs may not take, because `generated` already uses them. */
   val ReservedEventNames: Set[String] = Set("enums")
-
-  def write(dir: String, sites: Seq[SiteLayout], objectTypes: Seq[ObjectTypeInfo], collections: Seq[CollectionInfo]): Path = {
-    val path = Paths.get(dir, FileName)
-    Files.createDirectories(path.toAbsolutePath.getParent)
-    Files.write(path, header(sites, objectTypes, collections).getBytes(StandardCharsets.UTF_8))
-    path
-  }
 
   /** Why `name` cannot become a C++ type or member name, if it cannot. */
   def identifierError(name: String): Option[String] =
@@ -80,8 +70,8 @@ private[eventtrace] object CppGen {
        |#include <string>
        |#include <vector>
        |
-       |#include "eventtrace/runtime.h"
-       |#include "eventtrace/tracker.h"
+       |#include "eventtrace_runtime.h"
+       |#include "eventtrace_tracker.h"
        |
        |// The nonzero payload word counts of this design's sinks. An adapter defines one entry point per count,
        |// eventtrace_emit_w<n>, by passing a macro taking n.
@@ -179,20 +169,20 @@ private[eventtrace] object CppGen {
   }
 
   private def eventPrinter(e: EventSchema): String = {
-    val head = s"""  std::printf("eventtrace cycle=%lld event_id=%llu site_id=%u ${printfText(e.name)}", cycle, event_id, site);"""
-    val subject = e.subject.map(t => s"""  std::printf(" subject=$t#%llu", e.subject);""").toSeq
+    val head = s"""  std::fprintf(out, "eventtrace cycle=%lld event_id=%llu site_id=%u ${printfText(e.name)}", cycle, event_id, site);"""
+    val subject = e.subject.map(t => s"""  std::fprintf(out, " subject=$t#%llu", e.subject);""").toSeq
     val fields = e.fields.map { f =>
       val optional = e.optional(f.name)
       val value = if (optional) s"(*e.${f.name})" else s"e.${f.name}"
       val call = f.idOf match {
-        case Some(t) => s"""std::printf(" ${f.name}=$t#%llu", $value);"""
-        case None    => s"""std::printf(" ${f.name}=%${printfConversion(f)}, ${printfArgument(f, value)});"""
+        case Some(t) => s"""std::fprintf(out, " ${f.name}=$t#%llu", $value);"""
+        case None    => s"""std::fprintf(out, " ${f.name}=%${printfConversion(f)}, ${printfArgument(f, value)});"""
       }
       if (optional) s"  if (e.${f.name}) $call" else s"  $call"
     }
-    s"""inline void print(long long cycle, unsigned long long event_id, unsigned site, const ${eventRef(e)}& e) {
+    s"""inline void print(std::FILE* out, long long cycle, unsigned long long event_id, unsigned site, const ${eventRef(e)}& e) {
        |${(head +: (subject ++ fields)).mkString("\n")}
-       |  std::printf("\\n");
+       |  std::fputc('\\n', out);
        |}
        |""".stripMargin
   }
@@ -235,7 +225,7 @@ private[eventtrace] object CppGen {
   private def siteHandler(s: SiteLayout, e: EventSchema, stored: Map[String, ObjectTypeInfo]): String = {
     val signature = s"  void site${s.id}(Runtime& rt, [[maybe_unused]] const uint32_t* w) {"
     val comment = s"""  // Site ${s.id}: "${s.name}" in ${commentText(s.instance)} at ${commentText(s.location)}"""
-    val print = s"text::print(rt.cycle(), event, ${s.id}, e);"
+    val print = s"text::print(rt.out(), rt.cycle(), event, ${s.id}, e);"
     val body = s.plan match {
       case None =>
         Seq("const auto e = decodeSite" + s.id + "(w);", "const unsigned long long event = rt.next_event_id();", print)

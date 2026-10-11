@@ -5,6 +5,8 @@ import circt.stage.ChiselStage
 import eventtrace.EventTrace
 import eventtrace.EventTrace.syntax._
 
+import java.nio.file.{Files, Paths}
+
 /** Stage 0b fixture: one two-field event every eighth cycle. */
 class Counter extends Module {
   val io = IO(new Bundle {
@@ -26,11 +28,13 @@ class Counter extends Module {
 }
 
 object Main extends App {
+  EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")
   ChiselStage.emitSystemVerilogFile(
     new Counter,
     args = Array("--target-dir", targetDir, "--split-verilog"),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
-  EventTrace.emitGenerated(targetDir)
+  // The manifest describes the design for tools outside the simulator, so the flow writes it after elaborating.
+  Files.writeString(Paths.get(targetDir, "eventtrace_manifest.json"), EventTrace.manifest)
 }

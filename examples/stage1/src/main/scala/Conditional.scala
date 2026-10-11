@@ -7,6 +7,8 @@ import eventtrace.{EventTrace, Utils}
 import eventtrace.EventTrace.capture
 import eventtrace.EventTrace.syntax._
 
+import java.nio.file.{Files, Paths}
+
 /** Three variants in two bits, so the fourth bit pattern is not a variant. */
 object Mode extends ChiselEnum {
   val Off, Slow, Fast = Value
@@ -113,11 +115,13 @@ class Conditional extends Module {
 }
 
 object Main extends App {
+  EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")
   ChiselStage.emitSystemVerilogFile(
     new Conditional,
     args = Array("--target-dir", targetDir, "--split-verilog"),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
-  EventTrace.emitGenerated(targetDir)
+  // The manifest describes the design for tools outside the simulator, so the flow writes it after elaborating.
+  Files.writeString(Paths.get(targetDir, "eventtrace_manifest.json"), EventTrace.manifest)
 }

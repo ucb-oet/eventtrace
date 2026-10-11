@@ -1,24 +1,15 @@
 package eventtrace
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path, Paths}
-
 /** Generates the manifest for tools outside the simulator: what consumers see.
   *
   * It lists each event name and its fields, sorted by name; each enum that a field uses, with its variants; and a
   * sites table mapping each site ID, which every record carries, to its event name, Chisel instance path, and
   * source location. Payload bit layouts are internal and left out.
+  *
+  * Unlike the generated C++, the manifest describes the design rather than being compiled into the simulator, so it
+  * does not travel through firtool; see [[EventTrace.manifest]].
   */
 private[eventtrace] object ManifestGen {
-  val FileName = "eventtrace_manifest.json"
-
-  def write(dir: String, events: Seq[EventSchema], sites: Seq[SiteLayout]): Path = {
-    val path = Paths.get(dir, FileName)
-    Files.createDirectories(path.toAbsolutePath.getParent)
-    Files.write(path, json(events, sites).getBytes(StandardCharsets.UTF_8))
-    path
-  }
-
   def json(events: Seq[EventSchema], sites: Seq[SiteLayout]): String = {
     val entries = events.map { e =>
       val fields = e.fields.map { f =>

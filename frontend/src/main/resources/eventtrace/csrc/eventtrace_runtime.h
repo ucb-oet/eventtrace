@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <vector>
 
 namespace eventtrace {
@@ -34,6 +35,14 @@ class Sites {
 class Runtime {
  public:
   explicit Runtime(Sites& sites);
+
+  // Sends records to the file at `path`. Each sink calls it at the start of the simulation with the path given as
+  // +eventtrace=<path>; the first call opens the file, and later calls do nothing. Until a file is open, the runtime
+  // ignores every record, so a simulation run without the plusarg pays only for the calls that deliver them.
+  void open(const char* path);
+
+  // Where records go.
+  std::FILE* out() const { return out_; }
 
   // Takes one record whose payload is `words` 32-bit words. The payload is copied, since the caller owns it only
   // during the call. A cycle is complete once a record from a later cycle arrives or finish() is called.
@@ -67,6 +76,7 @@ class Runtime {
   [[noreturn]] void fail(const char* format, ...) const;
 
   Sites& sites_;
+  std::FILE* out_ = nullptr;  // null until open()
   long long cycle_ = -1;  // the cycle being buffered; -1 before the first record
   std::vector<Record> records_;
   std::vector<uint32_t> words_;

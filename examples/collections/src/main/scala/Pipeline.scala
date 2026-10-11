@@ -6,6 +6,8 @@ import circt.stage.ChiselStage
 import eventtrace.{EventTrace, Utils}
 import eventtrace.EventTrace.syntax._
 
+import java.nio.file.{Files, Paths}
+
 object Stage extends ChiselEnum {
   val Decode, Execute, Writeback = Value
 }
@@ -102,11 +104,13 @@ class Pipeline extends Module {
 }
 
 object Main extends App {
+  EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")
   ChiselStage.emitSystemVerilogFile(
     new Pipeline,
     args = Array("--target-dir", targetDir, "--split-verilog"),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
-  EventTrace.emitGenerated(targetDir)
+  // The manifest describes the design for tools outside the simulator, so the flow writes it after elaborating.
+  Files.writeString(Paths.get(targetDir, "eventtrace_manifest.json"), EventTrace.manifest)
 }

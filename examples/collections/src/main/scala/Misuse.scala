@@ -54,11 +54,11 @@ class Misuse extends Module {
 }
 
 object MisuseMain extends App {
+  EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/misuse")
   ChiselStage.emitSystemVerilogFile(
     new Misuse,
     args = Array("--target-dir", targetDir, "--split-verilog"),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
-  EventTrace.emitGenerated(targetDir)
 }

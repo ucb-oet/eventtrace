@@ -2,20 +2,23 @@ package eventtrace
 
 import chisel3._
 import chisel3.experimental.{ExtModule, IntParam}
-import chisel3.util.HasExtModuleInline
+import chisel3.util.{HasExtModuleInline, HasExtModuleResource}
 
 /** Simulation capture sink for one site, sized to its payload of `words` 32-bit words.
   *
   * Its SystemVerilog calls the DPI function for its word count, `eventtrace_emit_w<words>`: SystemVerilog forbids
   * importing one C function with different argument types, so each payload width has its own. A site with no
-  * transmitted fields has no payload port. When the simulation ends, it calls `eventtrace_finish`.
+  * transmitted fields has no payload port. At the start of the simulation it passes the path given as
+  * `+eventtrace=<path>` to `eventtrace_open`, and when the simulation ends, it calls `eventtrace_finish`.
   *
-  * Chisel 7.5 deprecates `chisel3.experimental.ExtModule` and `HasExtModuleInline` in favour of `chisel3.ExtModule`,
-  * which has `setInline` built in; this spelling compiles on both Chisel 6.7 and 7.
+  * Chisel 7.5 deprecates `chisel3.experimental.ExtModule`, `HasExtModuleInline`, and `HasExtModuleResource` in favour
+  * of `chisel3.ExtModule`, which has `setInline` and `addResource` built in; this spelling compiles on both Chisel 6.7
+  * and 7.
   */
 private[eventtrace] class EventTraceSink(siteId: Int, val words: Int)
     extends ExtModule(Map("SITE_ID" -> IntParam(siteId)))
-    with HasExtModuleInline {
+    with HasExtModuleInline
+    with HasExtModuleResource {
   val clock   = IO(Input(Clock()))
   val reset   = IO(Input(Bool()))
   val enable  = IO(Input(Bool()))
@@ -42,11 +45,20 @@ private[eventtrace] object EventTraceSink {
        |  input reset,
        |  input enable$payloadPort
        |);
+       |  import "DPI-C" function void eventtrace_open(input string path);
        |  import "DPI-C" function void eventtrace_emit_w$words(
        |    input longint cycle,
        |    input int     site$payloadArg
        |  );
        |  import "DPI-C" function void eventtrace_finish();
+       |
+       |  // Records go to the file named by +eventtrace=<path>; without it, the runtime ignores them. Every sink asks;
+       |  // only the first call opens the file.
+       |  initial begin
+       |    string path;
+       |    if ($$value$$plusargs("eventtrace=%s", path))
+       |      eventtrace_open(path);
+       |  end
        |
        |  // Clock edges since the simulation started, not since reset, so that sinks under different or repeated
        |  // resets agree on every edge.

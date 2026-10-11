@@ -113,6 +113,7 @@ class ReservedName extends Module {
 
 /** Passes only if each design fails to elaborate with its expected error. */
 object Rejects extends App {
+  EventTrace.enable()
   val cases = Seq[(String, () => RawModule, String)](
     ("mismatched namesakes", () => new MismatchedFields, "sites sharing an event name must declare exactly the same fields"),
     ("capture under a nested when", () => new NestedWhen, "is under a `when` nested inside"),
