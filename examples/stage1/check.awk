@@ -12,10 +12,13 @@
 #   "wide" fires when count bit 4 is set; its 76-bit payload spans three words.
 #   "flush" fires at count 5 without fields, its site leaving `cause` DontCare, and at count 6 with cause=2. The
 #   manifest marks `cause` optional.
+#   "rise1" and "rise2" fire on the first cycle of each run of count bits 1 and 2 (count mod 4 = 2, count mod 8 = 4),
+#   and "fall2" on the first cycle after a run of bit 2 (count mod 8 = 0, except at count 0). Each reset clears the
+#   edge registers, so no edge fires when a segment starts.
 # The runtime handles each cycle's records in site-ID order and numbers events as it goes, so records must appear in
 # (cycle, site_id) order with event_id counting up from 0. The last cycle's records appear only if the sinks' final
 # blocks flush the runtime.
-# Each record is assigned a slot (0 to 9) from its event and fields. Its site_id is looked up in the manifest's sites
+# Each record is assigned a slot (0 to 12) from its event and fields. Its site_id is looked up in the manifest's sites
 # table, which must name the record's event and, for the two lanes, their distinct instance paths.
 # "rest" fields must print in canonical (sorted) order.
 function fail(message) {
@@ -72,6 +75,9 @@ FNR == NR {
   else if (name == "mode")   slot = 7
   else if (name == "wide")   slot = 8
   else if (name == "flush")  slot = 9
+  else if (name == "rise1")  slot = 10
+  else if (name == "rise2")  slot = 11
+  else if (name == "fall2")  slot = 12
   else                       slot = -1
   seen[c, slot]++
   n++
@@ -86,6 +92,7 @@ FNR == NR {
   else if (slot == 7) ok = (f["mode"] == mode_text[k % 4] && f["target"] == "Fast" && fields == 2)
   else if (slot == 8) ok = (f["a"] == k * 16843009 && f["b"] == (k % 16) * 4294967296 + k * 16843009 && f["c"] == k)
   else if (slot == 9) ok = (k == 5 && fields == 0) || (k == 6 && fields == 1 && f["cause"] == 2)
+  else if (slot >= 10) ok = (fields == 0)
   else                ok = 0
   if (slot == 3 || slot == 4)
     if (!($(at + 1) ~ /^odd=/ && $(at + 2) ~ /^path=/ && $(at + 3) ~ /^phase=/ && fields == 3)) ok = 0
@@ -93,7 +100,7 @@ FNR == NR {
 }
 
 END {
-  if (sites != 11) fail("expected 11 sites in the manifest, got " sites + 0)
+  if (sites != 14) fail("expected 14 sites in the manifest, got " sites + 0)
   if (!cause_optional) fail("the manifest should mark flush's cause optional")
   if (!mode_enum) fail("the manifest's enums table lacks Mode with its three variants")
   if (mode_fields != 2) fail("the manifest should list mode and target as Mode enum fields")
@@ -107,10 +114,11 @@ END {
   for (c = 0; c <= 52; c++) {
     k = count_at(c)
     branch = (k >= 0 && int(k / 4) % 2 == 1) ? k % 4 + 1 : -1
-    for (slot = 0; slot <= 9; slot++) {
+    for (slot = 0; slot <= 12; slot++) {
       want = (k >= 0 && (slot == 0 || slot == branch || (slot == 5 && k % 2 == 1) || (slot == 6 && k % 2 == 0) ||
               (slot == 7 && int(k / 8) % 2 == 1) || (slot == 8 && int(k / 16) % 2 == 1) ||
-              (slot == 9 && (k == 5 || k == 6)))) ? 1 : 0
+              (slot == 9 && (k == 5 || k == 6)) || (slot == 10 && k % 4 == 2) || (slot == 11 && k % 8 == 4) ||
+              (slot == 12 && k % 8 == 0 && k > 0))) ? 1 : 0
       if (seen[c, slot] + 0 != want)
         fail("cycle " c " slot " slot ": expected " want " record(s), got " seen[c, slot] + 0)
     }
@@ -118,6 +126,6 @@ END {
   if (bad) exit 1
   print "PASS: " n " records from " sites " sites over edges 0 to 52, with reset at edges 0-2 and 27-28; every site " \
     "fired exactly in its branch's cycles, the two lane instances have their own sites, enum fields print as " \
-    "variant names, a three-word payload decodes, a DontCare field is left out, and event IDs follow (cycle, site) " \
-    "order through the final cycle"
+    "variant names, a three-word payload decodes, a DontCare field is left out, edge helpers fire once per run, and " \
+    "event IDs follow (cycle, site) order through the final cycle"
 }

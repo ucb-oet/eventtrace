@@ -3,7 +3,7 @@ package eventtrace.examples.stage1
 import chisel3._
 import chisel3.util.Cat
 import circt.stage.ChiselStage
-import eventtrace.EventTrace
+import eventtrace.{EventTrace, Utils}
 import eventtrace.EventTrace.syntax._
 
 /** Two sites share the name "rest", but `phase` is 2 bits at one and 3 bits at the other. */
@@ -86,6 +86,25 @@ class UnknownWidth extends Module {
   EventTrace.event("unsized") { "w" := w }
 }
 
+/** The edge's register would update only while `a(0)` holds. */
+class EdgeInsideWhen extends Module {
+  val a = IO(Input(UInt(4.W)))
+  when (a(0)) {
+    val rise = Utils.rising(a(1))
+    when (rise) {
+      EventTrace.event("inner") {}
+    }
+  }
+}
+
+/** The event's enable would evaluate the condition again, building a second register inside the `when`. */
+class EdgeAsCondition extends Module {
+  val a = IO(Input(UInt(4.W)))
+  when (Utils.rising(a(1))) {
+    EventTrace.event("edge") {}
+  }
+}
+
 /** `cycle` is a key every record already has. */
 class ReservedName extends Module {
   val a = IO(Input(UInt(4.W)))
@@ -102,7 +121,9 @@ object Rejects extends App {
     ("namesakes with different enums", () => new MismatchedEnums, "declares [gear: Gear], but the site with the same name"),
     ("two enums with one name", () => new SameEnumName, "two different ChiselEnums are named Mode"),
     ("field wider than 64 bits", () => new WideField, "is 72 bits wide"),
-    ("field of unknown width", () => new UnknownWidth, "has an unknown width")
+    ("field of unknown width", () => new UnknownWidth, "has an unknown width"),
+    ("edge built inside a when", () => new EdgeInsideWhen, "Utils.rising creates a register, so call it outside any `when`"),
+    ("edge as an event's condition", () => new EdgeAsCondition, "compute the edge into a `val` before the `when`")
   )
   val failures = cases.filterNot { case (label, gen, expected) =>
     val error = try { ChiselStage.emitCHIRRTL(gen()); None } catch { case e: Throwable => Some(e) }

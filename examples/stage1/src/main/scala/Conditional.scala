@@ -3,7 +3,7 @@ package eventtrace.examples.stage1
 import chisel3._
 import chisel3.util.Cat
 import circt.stage.ChiselStage
-import eventtrace.EventTrace
+import eventtrace.{EventTrace, Utils}
 import eventtrace.EventTrace.capture
 import eventtrace.EventTrace.syntax._
 
@@ -24,7 +24,7 @@ class Lane extends Module {
 
 /** Stage 1 fixture: sites under when/elsewhen/otherwise inside an outer when, one unconditional site, one event in a
   * module instantiated twice, one event with enum fields, one event whose payload spans three words, and one event
-  * whose field is DontCare at one of its two sites.
+  * whose field is DontCare at one of its two sites, and events at the edges of counter bits.
   */
 class Conditional extends Module {
   val io = IO(new Bundle {
@@ -91,6 +91,18 @@ class Conditional extends Module {
   }
   when (count === 6.U) {
     EventTrace.event("flush") { "cause" := count(1, 0) }
+  }
+
+  // Edge helpers, each computed into a val before its `when`.
+  for (b <- Seq(1, 2)) {
+    val rise = Utils.rising(count(b))
+    when (rise) {
+      EventTrace.event(s"rise$b") {}
+    }
+  }
+  val fall2 = Utils.falling(count(2))
+  when (fall2) {
+    EventTrace.event("fall2") {}
   }
 
   // lane0 sees odd values on odd cycles and lane1 on even cycles, so exactly one lane fires each cycle.

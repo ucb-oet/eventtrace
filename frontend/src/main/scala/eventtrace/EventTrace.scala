@@ -57,6 +57,9 @@ object EventTrace {
     entries:   mutable.ArrayBuffer[Entry])
 
   private val openEvent = new DynamicVariable[Option[OpenEvent]](None)
+
+  /** Set while an event reads its enable from `when.cond`, which evaluates every enclosing condition again. */
+  private[eventtrace] val computingEnable = new DynamicVariable(false)
   private val siteLayouts = mutable.ArrayBuffer.empty[SiteLayout]
 
   /** Every enum used so far, by simple name, which generated C++ and the manifest use. */
@@ -130,8 +133,10 @@ object EventTrace {
     val name = SiteLayout.qualifiedName(subject.map(_.typeName), written)
     val lifecycle = subject.map(_ => "create")
 
-    // The library call does not inherit the `when` the way a printf does; capture it explicitly.
-    val enable = when.cond
+    // The library call does not inherit the `when` the way a printf does; capture it explicitly. `when.cond`
+    // evaluates each enclosing condition again, so a condition that builds state builds it twice; Utils' edges
+    // reject being evaluated again.
+    val enable = computingEnable.withValue(true)(when.cond)
     val module = Module.currentModule.getOrElse(elaborationError(s"$what is outside a module", sourceInfo))
     val entries = mutable.ArrayBuffer.empty[Entry]
     openEvent.withValue(Some(OpenEvent(name, subject, module, WhenDepth(), entries)))(body)
@@ -387,6 +392,6 @@ object EventTrace {
     case _                         => "unknown location"
   }
 
-  private def elaborationError(message: String, sourceInfo: SourceInfo): Nothing =
+  private[eventtrace] def elaborationError(message: String, sourceInfo: SourceInfo): Nothing =
     throw new IllegalArgumentException(s"$message (${location(sourceInfo)})")
 }
