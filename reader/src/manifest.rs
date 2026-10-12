@@ -36,6 +36,13 @@ pub struct EventSchema {
     pub fields: Vec<FieldSchema>,
 }
 
+impl EventSchema {
+    /// The event's name without its object type, as `stall` for `instruction.stall`.
+    pub fn short_name(&self) -> &str {
+        self.name.split_once('.').map_or(&self.name, |(_, short)| short)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Lifecycle {

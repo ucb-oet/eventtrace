@@ -18,7 +18,7 @@ sha2 = "0.11"
 prost-build = "0.14"
 protox = "0.10"
 
-# Sodor's checker, which may not stay; src/main.rs is the `eventtrace` command.
+# Sodor's checker, which may not stay; src/bin/eventtrace/ is the `eventtrace` command.
 [[bin]]
 name = "check_sodor"
 path = "sodor/check.rs"

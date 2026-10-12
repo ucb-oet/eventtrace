@@ -1,6 +1,6 @@
-//! Converts a trace into a waterfall file for the illilouette viewer: one row per object, with its stages, label, how
-//! it ended, and its events, all already derived, so the viewer applies none of the trace's rules. The file is
-//! illilouette's waterfall.proto, of which proto/waterfall.proto is a copy.
+//! `eventtrace waterfall`: converts a trace into a waterfall file for the illilouette viewer, one row per object, with
+//! its stages, label, how it ended, and its events, all already derived, so the viewer applies none of the trace's
+//! rules. The file is illilouette's waterfall.proto, of which proto/waterfall.proto is a copy.
 //!
 //! The view, as `view.rs` describes it, gives the field whose value is an object's stage, its label, the instruction
 //! to disassemble, and the event that ends an object normally. Rows are in ID order, the order in which objects were
@@ -9,14 +9,17 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 
 use eventtrace::manifest::{FieldSchema, FieldType, Lifecycle};
 use eventtrace::objects::Key;
-use eventtrace::{Error, Event, Manifest, Result, Value};
+use eventtrace::text::{self, Style};
+use eventtrace::{Error, Event, Events, Manifest, Result, Value};
 use indexmap::IndexMap;
 use prost::Message;
 
 use crate::disasm::Disassembler;
+use crate::output;
 use crate::view::View;
 
 /// illilouette's messages, generated from proto/waterfall.proto.
@@ -27,6 +30,9 @@ mod pb {
 use pb::event::Effect;
 
 const FORMAT_VERSION: u32 = 1;
+
+/// Values as text, with addresses in hex, and object IDs without their type, since a file draws one type of object.
+const STYLE: Style = Style { bare_ids: true, wide_hex: true };
 
 /// The file's text table: each text once, index 0 the empty text.
 struct Texts {
@@ -44,7 +50,29 @@ impl Texts {
     }
 }
 
-pub fn convert<W: Write>(
+#[derive(clap::Args)]
+pub struct Args {
+    /// The design's view, such as reader/sodor/view.json
+    view: PathBuf,
+    /// The design's manifest
+    manifest: PathBuf,
+    /// The trace, a file or a named pipe
+    trace: PathBuf,
+    /// The waterfall file to write
+    output: PathBuf,
+}
+
+pub fn run(args: Args) -> Result<()> {
+    let view = View::load(&args.view)?;
+    let manifest = Manifest::load(&args.manifest)?;
+    let events = Events::open(&manifest, &args.trace)?;
+    let out = output::create(&args.output)?;
+    // The viewer titles the file with the trace's name.
+    let title = args.trace.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    convert(&view, &manifest, events, title, out)
+}
+
+fn convert<W: Write>(
     view: &View,
     manifest: &Manifest,
     events: impl Iterator<Item = Result<Event>>,
@@ -63,23 +91,9 @@ pub fn convert<W: Write>(
     let track_type = *field_types
         .get(track)
         .ok_or_else(|| Error(format!("no event of {object} sets a field named {track}")))?;
-    let text = |name: &str, value: Value| -> String {
-        let field = field_types[name];
-        match (field.ty, value) {
-            (FieldType::Enum, Value::Unsigned(v)) => {
-                let enum_name = field.enum_name.as_deref().unwrap_or("");
-                manifest.variant(enum_name, v).map(str::to_string).unwrap_or_else(|| format!("{enum_name}({v})"))
-            }
-            (FieldType::Id, Value::Unsigned(v)) => format!("#{v}"),
-            (FieldType::UInt, Value::Unsigned(v)) if field.width.unwrap_or(0) > 16 => {
-                format!("0x{v:0width$x}", width = (field.width.unwrap() as usize).div_ceil(4))
-            }
-            _ => value.to_string(),
-        }
-    };
+    let text_of = |name: &str, value: Value| text::value(manifest, field_types[name], value, STYLE).to_string();
     let present = |e: &Event| -> Vec<(&str, Value)> {
-        let schema = &manifest.events[e.event];
-        schema.fields.iter().zip(&e.values).filter_map(|(f, v)| v.map(|v| (f.name.as_str(), v))).collect()
+        e.present_fields(manifest).map(|(f, v)| (f.name.as_str(), v)).collect()
     };
 
     // The whole file is one message, so the object's events are read first.
@@ -123,7 +137,7 @@ pub fn convert<W: Write>(
         file.sites.push(pb::Site { event, instance, source });
     }
     let name = texts.get(object);
-    let stages = stage_values.iter().map(|&v| texts.get(&text(track, v))).collect();
+    let stages = stage_values.iter().map(|&v| texts.get(&text_of(track, v))).collect();
     file.types.push(pb::Type { name, stages });
 
     let mut rows: IndexMap<u64, pb::Row> = IndexMap::new();
@@ -138,7 +152,7 @@ pub fn convert<W: Write>(
         if lifecycle == Some(Lifecycle::Destroy) {
             event.effect = Some(Effect::Ends(true));
             row.end = Some(e.cycle + 1);
-            let short = schema.name.split_once('.').map_or(schema.name.as_str(), |(_, short)| short);
+            let short = schema.short_name();
             row.ended_by = texts.get(short);
             row.normal_end = view.normal_end.as_deref().is_none_or(|normal| normal == short);
         } else if let Some(value) = e.get(manifest, track) {
@@ -156,7 +170,7 @@ pub fn convert<W: Write>(
                 continue;
             }
             let name_text = texts.get(name);
-            let value_text = texts.get(&text(name, value));
+            let value_text = texts.get(&text_of(name, value));
             event.fields.push(pb::Field { name: name_text, text: value_text, row: None });
             if let (FieldType::Id, Some(other)) = (field_types[name].ty, value.unsigned()) {
                 refs.push((id, row.events.len(), event.fields.len() - 1, other));
@@ -166,7 +180,7 @@ pub fn convert<W: Write>(
         if lifecycle == Some(Lifecycle::Create) {
             for &(name, value) in fields.iter().filter(|(name, _)| *name != track) {
                 let name_text = texts.get(name);
-                let value_text = texts.get(&text(name, value));
+                let value_text = texts.get(&text_of(name, value));
                 row.fields.push(pb::Field { name: name_text, text: value_text, row: None });
             }
         }
@@ -186,7 +200,7 @@ pub fn convert<W: Write>(
     for (id, row) in rows.iter_mut() {
         let fields = &known[id];
         for &name in &labels {
-            row.label.push(fields.get(name).map_or(0, |&value| texts.get(&text(name, value))));
+            row.label.push(fields.get(name).map_or(0, |&value| texts.get(&text_of(name, value))));
         }
         if let (Some(d), Some(dasm)) = (&view.disassemble, dasm.as_mut()) {
             let bits = fields.get(d.bits.as_str()).and_then(|v| v.unsigned());
@@ -208,5 +222,5 @@ pub fn convert<W: Write>(
     file.first_cycle = first.unwrap_or(0);
     file.last_cycle = last.unwrap_or(0);
     file.strings = texts.index.into_keys().collect();
-    out.write_all(&file.encode_to_vec()).and_then(|()| out.flush()).map_err(|e| Error(format!("cannot write the output: {e}")))
+    out.write_all(&file.encode_to_vec()).and_then(|()| out.flush()).map_err(output::error)
 }

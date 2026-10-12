@@ -7,7 +7,7 @@ use std::path::Path;
 
 use prost::Message;
 
-use crate::manifest::{FieldType, Manifest};
+use crate::manifest::{FieldSchema, FieldType, Manifest};
 use crate::proto::{self, record};
 use crate::{Error, Result};
 
@@ -59,6 +59,11 @@ impl Event {
     /// The value of a field, by name, if the event has the field and it is present.
     pub fn get(&self, manifest: &Manifest, field: &str) -> Option<Value> {
         self.values[manifest.field_index(self.event, field)?]
+    }
+
+    /// The fields the event has present, in the manifest's order, each with its schema.
+    pub fn present_fields<'m>(&self, manifest: &'m Manifest) -> impl Iterator<Item = (&'m FieldSchema, Value)> {
+        manifest.events[self.event].fields.iter().zip(&self.values).filter_map(|(f, v)| v.map(|v| (f, v)))
     }
 }
 
