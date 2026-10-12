@@ -4,6 +4,15 @@
 // A trace is a sequence of Records, each preceded by its length as a varint, as in protobuf's delimited streams.
 // The first Record is a Header; each later one holds the events of one cycle that had any.
 //
+// An object is its type and ID: an event's subject has the type the manifest gives the event, and each type counts
+// IDs from 0, never reusing one. An object's events are those with it as their subject. It lives from the event the
+// manifest marks as its create to the one marked as its destroy, or to the end of the trace if it has none. An Id
+// field names another object, of the type the manifest gives the field.
+//
+// An event at cycle c sees the state before clock edge c, and its effects, such as creating or destroying its
+// subject or setting a field of it, hold from cycle c+1. The events of one cycle are simultaneous: their order, by
+// site ID, is not causal, so an object's destroy event may precede another of its events in that cycle.
+//
 // A trace may hold only a window of the simulation's cycles, set by +eventtrace_start and +eventtrace_stop. Objects
 // keep the IDs they had from the start of the simulation, and one created before the window appears without its
 // create event, so a reader knows only the fields that later events give.
