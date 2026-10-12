@@ -1,0 +1,56 @@
+// The part of Perfetto's trace format that `eventtrace perfetto` writes: the messages and fields it sets, with the
+// numbers and types of upstream's protos/perfetto/trace/perfetto_trace.proto (Perfetto v58). A field that upstream
+// puts in a oneof is a plain optional field here, since the converter sets at most one field of each oneof and both
+// encode alike. Fields are listed by number, the order in which they are encoded.
+syntax = "proto2";
+
+package perfetto.protos;
+
+message Trace {
+  repeated TracePacket packet = 1;
+}
+
+message TracePacket {
+  optional uint64 timestamp = 8;
+  optional uint32 trusted_packet_sequence_id = 10;  // in upstream's oneof optional_trusted_packet_sequence_id
+  optional TrackEvent track_event = 11;             // in upstream's oneof data
+  optional TrackDescriptor track_descriptor = 60;   // in upstream's oneof data
+}
+
+message TrackDescriptor {
+  enum ChildTracksOrdering {
+    UNKNOWN = 0;
+    LEXICOGRAPHIC = 1;
+    CHRONOLOGICAL = 2;
+    EXPLICIT = 3;
+  }
+
+  optional uint64 uuid = 1;
+  optional string name = 2;  // in upstream's oneof static_or_dynamic_name
+  optional uint64 parent_uuid = 5;
+  optional ChildTracksOrdering child_ordering = 11;
+  optional int32 sibling_order_rank = 12;
+}
+
+message TrackEvent {
+  enum Type {
+    TYPE_UNSPECIFIED = 0;
+    TYPE_SLICE_BEGIN = 1;
+    TYPE_SLICE_END = 2;
+    TYPE_INSTANT = 3;
+    TYPE_COUNTER = 4;
+    TYPE_STATE = 5;
+  }
+
+  repeated DebugAnnotation debug_annotations = 4;
+  optional Type type = 9;
+  optional uint64 track_uuid = 11;
+  optional string name = 23;  // in upstream's oneof name_field
+  repeated fixed64 flow_ids = 47;
+  repeated fixed64 terminating_flow_ids = 48;
+}
+
+message DebugAnnotation {
+  optional string string_value = 6;  // in upstream's oneof value
+  optional string name = 10;         // in upstream's oneof name_field
+}

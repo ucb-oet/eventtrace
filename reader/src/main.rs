@@ -1,5 +1,9 @@
 //! The `eventtrace` command: tools that read EventTrace traces, each given the design's manifest.
 
+mod disasm;
+mod perfetto;
+
+use std::fs::File;
 use std::io::{self, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -23,11 +27,24 @@ enum Command {
         /// The trace, a file or a named pipe
         trace: PathBuf,
     },
+    /// Converts a trace into a Perfetto trace of resources, for https://ui.perfetto.dev: one track per value of an
+    /// object field, with a slice for each object while it holds that value.
+    Perfetto {
+        /// The design's view, such as reader/sodor/view.json
+        view: PathBuf,
+        /// The design's manifest
+        manifest: PathBuf,
+        /// The trace, a file or a named pipe
+        trace: PathBuf,
+        /// The Perfetto trace to write
+        output: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Dump { manifest, trace } => dump(&manifest, &trace),
+        Command::Perfetto { view, manifest, trace, output } => convert(&view, &manifest, &trace, &output),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -55,4 +72,12 @@ fn output_error(e: io::Error) -> Result<()> {
         ErrorKind::BrokenPipe => Ok(()),
         _ => Err(Error(format!("cannot write the output: {e}"))),
     }
+}
+
+fn convert(view: &Path, manifest: &Path, trace: &Path, output: &Path) -> Result<()> {
+    let view = perfetto::View::load(view)?;
+    let manifest = Manifest::load(manifest)?;
+    let events = Events::open(&manifest, trace)?;
+    let out = File::create(output).map_err(|e| Error(format!("cannot create {}: {e}", output.display())))?;
+    perfetto::convert(&view, &manifest, events, BufWriter::new(out))
 }

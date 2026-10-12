@@ -2,6 +2,7 @@
 //! what its numbers refer to; `Manifest::load` reads the one, and `Events` the other with it.
 
 pub mod manifest;
+pub mod objects;
 pub mod text;
 pub mod trace;
 

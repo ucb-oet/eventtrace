@@ -6,6 +6,7 @@ description = "Reads EventTrace traces, and the tools built on reading them"
 publish = false
 
 [dependencies]
+capstone = { version = "0.14", default-features = false, features = ["full", "std", "arch_riscv"] }
 clap = { version = "4.6", features = ["derive"] }
 indexmap = { version = "2", features = ["serde"] }
 prost = "0.14"

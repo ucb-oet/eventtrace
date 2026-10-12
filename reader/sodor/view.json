@@ -1,0 +1,6 @@
+{
+  "tracks": "stage",
+  "label": "pc",
+  "hide": ["retire"],
+  "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv32i"}
+}

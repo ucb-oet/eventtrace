@@ -30,7 +30,7 @@ pub struct Event {
 }
 
 /// A field's value: a Bool, UInt, Enum, or Id is unsigned, and an SInt signed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Unsigned(u64),
     Signed(i64),
