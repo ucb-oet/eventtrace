@@ -23,7 +23,7 @@ $(MISUSE_DIR)/eventtrace_sites.h: $(SCALA_SOURCES) $(EVENTTRACE_DIR)/build.sbt
 $(VIOLATIONS): violations.cc $(MISUSE_DIR)/eventtrace_sites.h
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(MISUSE_DIR) -o $@ violations.cc $(MISUSE_DIR)/eventtrace_runtime.cc
 
-check-violations: $(VIOLATIONS)
+check-violations: $(VIOLATIONS) $(EVENTTRACE)
 	$(VIOLATIONS) "$(DUMP)" $(MISUSE_DIR)/eventtrace_manifest.json $(BUILD_DIR)
 
 # A recording window writes the full run's events from the cycle where its start trigger fires through the cycle where
@@ -34,7 +34,7 @@ WINDOW_STOP  := event:instruction.squash
 $(BUILD_DIR)/window.trace: $(SIM)
 	$(SIM) +eventtrace=$@ +eventtrace_start=$(WINDOW_START) +eventtrace_stop=$(WINDOW_STOP)
 
-check-window: $(BUILD_DIR)/run.log $(BUILD_DIR)/window.trace
+check-window: $(BUILD_DIR)/run.log $(BUILD_DIR)/window.trace $(EVENTTRACE)
 	$(DUMP) $(RTL_DIR)/eventtrace_manifest.json $(BUILD_DIR)/window.trace | sed 's/ event_id=[0-9]*//' > $(BUILD_DIR)/window.log
 	awk 'NR == FNR { c = substr($$2, 7) + 0; if (!s && / instruction.writeback .*result=7 /) s = c; \
 	                 if (s && !t && / instruction.squash /) t = c; next } \

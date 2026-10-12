@@ -1,6 +1,6 @@
 # Shared build for EventTrace examples: elaborate, build with Verilator, run, and check.
 # An example's Makefile sets SBT_PROJECT, MAIN, and DUT, then includes this file.
-# Run after sourcing Chipyard's env.sh, which provides firtool and verilator, with uv installed for the scripts.
+# Run after sourcing Chipyard's env.sh, which provides firtool and verilator, with cargo installed for the reader.
 #
 # Elaboration writes everything the simulator compiles into RTL_DIR, as Chipyard's flow would: the RTL, the sinks'
 # SystemVerilog, the runtime and DPI adapter, and the generated eventtrace_sites.h. Each example's main then writes
@@ -26,8 +26,14 @@ export CHISEL_FIRTOOL_PATH ?= $(patsubst %/,%,$(dir $(shell command -v firtool))
 # The frontend's sources include the runtime's C++, which it ships as resources.
 SCALA_SOURCES := $(shell find $(EVENTTRACE_DIR)/frontend/src src -type f)
 
-# Prints a trace as text, given its manifest. uv installs the scripts' dependencies on first use.
-DUMP := uv run -q --project $(EVENTTRACE_DIR)/scripts $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py
+# The reader's command, which Cargo rebuilds when the reader or the trace format changes.
+READER_DIR := $(EVENTTRACE_DIR)/reader
+EVENTTRACE := $(READER_DIR)/target/release/eventtrace
+READER_SOURCES := $(shell find $(READER_DIR)/src $(EVENTTRACE_DIR)/proto -type f) \
+	$(addprefix $(READER_DIR)/,build.rs Cargo.toml Cargo.lock)
+
+# Prints a trace as text, given its manifest.
+DUMP := $(EVENTTRACE) dump
 
 .PHONY: check run clean
 # Each check reads the manifest first, then the trace as text.
@@ -39,8 +45,11 @@ run: $(BUILD_DIR)/run.log
 $(BUILD_DIR)/run.trace: $(SIM)
 	$(SIM) +eventtrace=$@
 
-$(BUILD_DIR)/run.log: $(BUILD_DIR)/run.trace $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py
+$(BUILD_DIR)/run.log: $(BUILD_DIR)/run.trace $(EVENTTRACE)
 	$(DUMP) $(RTL_DIR)/eventtrace_manifest.json $< > $@
+
+$(EVENTTRACE): $(READER_SOURCES)
+	cargo build --release --quiet --manifest-path $(READER_DIR)/Cargo.toml
 
 # Start from an empty directory, since the simulator build compiles every .sv and .cc file in it.
 $(RTL): $(SCALA_SOURCES) $(EVENTTRACE_DIR)/build.sbt
