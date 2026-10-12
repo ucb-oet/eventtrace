@@ -24,9 +24,12 @@ eventtrace::Runtime runtime(tracker);
 
 }  // namespace
 
-// Every sink calls this at the start of the simulation with the path from +eventtrace=<path>; only the first call
-// does anything.
-extern "C" void eventtrace_open(const char* path) { runtime.open(path); }
+// Every sink calls this at the start of the simulation with the path from +eventtrace=<path> and the recording
+// window's triggers from +eventtrace_start and +eventtrace_stop, empty if not given; only the first call does
+// anything.
+extern "C" void eventtrace_open(const char* path, const char* start, const char* stop) {
+  runtime.open(path, start, stop);
+}
 
 // Each sink imports the entry point for its payload word count, since SystemVerilog forbids importing one C
 // function with different argument types. A sink without a payload passes none.

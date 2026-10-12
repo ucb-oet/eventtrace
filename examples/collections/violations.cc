@@ -18,7 +18,8 @@ namespace {
 // The site of the event cell.<name>, or of <name> if it is qualified or has no subject.
 unsigned site(const std::string& name) {
   for (unsigned s = 0; s < eventtrace::sites::kSiteCount; ++s)
-    if ("cell." + name == eventtrace::sites::kSiteNames[s] || name == eventtrace::sites::kSiteNames[s]) return s;
+    if ("cell." + name == eventtrace::sites::kSiteEvents[s].name || name == eventtrace::sites::kSiteEvents[s].name)
+      return s;
   std::fprintf(stderr, "no site emits %s\n", name.c_str());
   std::exit(2);
 }

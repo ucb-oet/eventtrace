@@ -9,7 +9,8 @@ import chisel3.util.{HasExtModuleInline, HasExtModuleResource}
   * Its SystemVerilog calls the DPI function for its word count, `eventtrace_emit_w<words>`: SystemVerilog forbids
   * importing one C function with different argument types, so each payload width has its own. A site with no
   * transmitted fields has no payload port. At the start of the simulation it passes the path given as
-  * `+eventtrace=<path>` to `eventtrace_open`, and when the simulation ends, it calls `eventtrace_finish`.
+  * `+eventtrace=<path>` to `eventtrace_open`, with the recording window's triggers given as `+eventtrace_start` and
+  * `+eventtrace_stop`, and when the simulation ends, it calls `eventtrace_finish`.
   *
   * Chisel 7.5 deprecates `chisel3.experimental.ExtModule`, `HasExtModuleInline`, and `HasExtModuleResource` in favour
   * of `chisel3.ExtModule`, which has `setInline` and `addResource` built in; this spelling compiles on both Chisel 6.7
@@ -45,19 +46,23 @@ private[eventtrace] object EventTraceSink {
        |  input reset,
        |  input enable$payloadPort
        |);
-       |  import "DPI-C" function void eventtrace_open(input string path);
+       |  import "DPI-C" function void eventtrace_open(input string path, input string start, input string stop);
        |  import "DPI-C" function void eventtrace_emit_w$words(
        |    input longint cycle,
        |    input int     site$payloadArg
        |  );
        |  import "DPI-C" function void eventtrace_finish();
        |
-       |  // Records go to the file named by +eventtrace=<path>; without it, the runtime ignores them. Every sink asks;
-       |  // only the first call opens the file.
+       |  // Records go to the file named by +eventtrace=<path>; without it, the runtime ignores them. The triggers of
+       |  // the recording window, +eventtrace_start=<trigger> and +eventtrace_stop=<trigger>, are empty when not given.
+       |  // Every sink asks; only the first call opens the file.
        |  initial begin
-       |    string path;
-       |    if ($$value$$plusargs("eventtrace=%s", path))
-       |      eventtrace_open(path);
+       |    string path, start, stop;
+       |    if ($$value$$plusargs("eventtrace=%s", path)) begin
+       |      void'($$value$$plusargs("eventtrace_start=%s", start));
+       |      void'($$value$$plusargs("eventtrace_stop=%s", stop));
+       |      eventtrace_open(path, start, stop);
+       |    end
        |  end
        |
        |  // Clock edges since the simulation started, not since reset, so that sinks under different or repeated

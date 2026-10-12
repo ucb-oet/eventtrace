@@ -3,6 +3,10 @@
 //
 // A trace is a sequence of Records, each preceded by its length as a varint, as in protobuf's delimited streams.
 // The first Record is a Header; each later one holds the events of one cycle that had any.
+//
+// A trace may hold only a window of the simulation's cycles, set by +eventtrace_start and +eventtrace_stop. Objects
+// keep the IDs they had from the start of the simulation, and one created before the window appears without its
+// create event, so a reader knows only the fields that later events give.
 syntax = "proto3";
 
 package eventtrace;

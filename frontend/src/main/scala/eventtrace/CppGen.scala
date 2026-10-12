@@ -6,10 +6,10 @@ package eventtrace
   *    fields sorted by name, and one enum class per `ChiselEnum` in `generated::enums`.
   *  - `eventtrace::proto`: one overloaded `encode` per event, which writes it to the trace in protobuf's wire
   *    format: its subject, and its present fields' values in the manifest's order.
-  *  - `eventtrace::sites`: runtime internals. Each site's payload word count, a decoder per site, because a site's
-  *    payload layout is internal and may differ between sites of one event, the tracked objects of each type that a
-  *    collection holds, and `Tracker`, whose handler for each site resolves its queries, stages its effects, and
-  *    writes its events to the trace.
+  *  - `eventtrace::sites`: runtime internals. Each site's payload word count, its event's name and fields, by which
+  *    recording triggers name them, a decoder per site, because a site's payload layout is internal and may differ
+  *    between sites of one event, the tracked objects of each type that a collection holds, and `Tracker`, whose
+  *    handler for each site resolves its queries, stages its effects, and writes its events to the trace.
   *
   * An event with a subject sits in a namespace named after its object type, so `packet.arrive` is
   * `generated::packet::arrive`.
@@ -47,7 +47,25 @@ private[eventtrace] object CppGen {
     // Sinks without a payload call eventtrace_emit_w0, which every adapter defines; the others are listed here.
     val wordCounts = ordered.map(_.payloadWords).filter(_ > 0).distinct.sorted.map(n => s"X($n)").mkString(" ")
     val words = if (ordered.isEmpty) "0" else ordered.map(_.payloadWords).mkString(", ")
-    val names = if (ordered.isEmpty) "\"\"" else ordered.map(s => s""""${cString(s.name)}"""").mkString(", ")
+    val schemas = events.map(e => e.name -> e).toMap
+    val eventIndex = events.map(_.name).zipWithIndex.toMap
+    // Each event's fields in the manifest's order, as recording triggers name them, with an enum's variants.
+    val variantArrays = enumDefs.map { d =>
+      val variants = d.variants.map { case (variant, value) => s"""{"$variant", ${hex(value)}}""" }
+      s"constexpr EnumVariant k${d.name}Variants[] = {${variants.mkString(", ")}};"
+    }
+    val fieldArrays = events.zipWithIndex.filter(_._1.fields.nonEmpty).map { case (e, i) =>
+      val fields = e.fields.map { f =>
+        val variants = f.enumDef.fold("nullptr, 0")(d => s"k${d.name}Variants, ${d.variants.length}")
+        s"""{"${f.name}", ${f.signed}, $variants}"""
+      }
+      s"constexpr FieldInfo kEvent${i}Fields[] = {${fields.mkString(", ")}};  // ${commentText(e.name)}"
+    }
+    val siteEvents = if (ordered.isEmpty) """{"", nullptr, 0}""" else ordered.map { s =>
+      val e = schemas(s.name)
+      val fields = if (e.fields.isEmpty) "nullptr" else s"info::kEvent${eventIndex(s.name)}Fields"
+      s"""{"${cString(s.name)}", $fields, ${e.fields.length}}"""
+    }.mkString(",\n    ")
     // Events without a subject sit in `generated`; the others in a namespace named after their object type.
     val eventTypes = events.groupBy(_.subject).toSeq.sortBy(_._1.getOrElse("")).map {
       case (None, group)       => group.map(eventType).mkString("\n")
@@ -59,7 +77,6 @@ private[eventtrace] object CppGen {
            |""".stripMargin
     }
     val typeIds = typeNames.zipWithIndex.map { case (t, i) => s"constexpr unsigned $t = $i;" }
-    val schemas = events.map(e => e.name -> e).toMap
     val handlers = ordered.map(s => siteHandler(s, schemas(s.name), stored.map(t => t.name -> t).toMap))
     val cases = ordered.map(s => s"      case ${s.id}: site${s.id}(rt, w); break;")
     val storeMembers = stored.map(t => s"  Store<objects::${t.name}> ${t.name}_objects_;")
@@ -113,9 +130,15 @@ private[eventtrace] object CppGen {
        |// SHA-256 of this design's manifest, which the trace's header carries.
        |constexpr const char* kManifestSha256 = "$manifestSha256";
        |
-       |// Payload words and event names per site, indexed by site ID.
+       |// Payload words per site, indexed by site ID.
        |constexpr unsigned kPayloadWords[] = {$words};
-       |constexpr const char* kSiteNames[] = {$names};
+       |
+       |// Each site's event, indexed by site ID: its name, and its fields in the manifest's order.
+       |namespace info {
+       |${(variantArrays ++ fieldArrays).mkString("\n")}
+       |}  // namespace info
+       |constexpr EventInfo kSiteEvents[] = {
+       |    $siteEvents};
        |
        |// Object types, numbered for the runtime's per-type ID counters.
        |constexpr unsigned kObjectTypeCount = ${typeNames.length};
@@ -136,7 +159,7 @@ private[eventtrace] object CppGen {
        | public:
        |  unsigned site_count() const override { return kSiteCount; }
        |  unsigned payload_words(unsigned site) const override { return kPayloadWords[site]; }
-       |  const char* site_name(unsigned site) const override { return kSiteNames[site]; }
+       |  const EventInfo& event(unsigned site) const override { return kSiteEvents[site]; }
        |  unsigned object_type_count() const override { return kObjectTypeCount; }
        |  const char* manifest_sha256() const override { return kManifestSha256; }
        |
