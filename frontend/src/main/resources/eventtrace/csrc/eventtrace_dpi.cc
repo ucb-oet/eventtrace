@@ -2,6 +2,7 @@
 // with the runtime as a black box's files, so firtool writes them next to the RTL and the simulator build compiles
 // them like any other black box's C++.
 #include <cstdint>
+#include <cstdlib>
 #include <type_traits>
 
 #include <svdpi.h>
@@ -16,6 +17,10 @@ namespace {
 // The tracker is constructed first, since the runtime asks it for the site table.
 eventtrace::sites::Tracker tracker;
 eventtrace::Runtime runtime(tracker);
+
+// A simulation that ends through $stop or $fatal skips the sinks' final blocks, so the runtime also finishes when the
+// process exits. Registered after the runtime is constructed, it runs before the runtime is destroyed.
+[[maybe_unused]] const int finish_at_exit = std::atexit([] { runtime.finish(); });
 
 }  // namespace
 
