@@ -243,7 +243,9 @@ object EventTrace {
     RuntimeSources.foreach(f => sink.addResource(s"/eventtrace/csrc/$f"))
     chisel3.experimental.annotate(sink) {
       val sites = resolvedSites(d)
-      Seq(BlackBoxInlineAnno(sink.toNamed, CppGen.FileName, CppGen.header(sites, d.objectTypes.values.toSeq, d.collections.toSeq)))
+      val manifestSha256 = ManifestGen.sha256(ManifestGen.json(EventSchema.fromSites(sites), sites))
+      val header = CppGen.header(sites, d.objectTypes.values.toSeq, d.collections.toSeq, manifestSha256)
+      Seq(BlackBoxInlineAnno(sink.toNamed, CppGen.FileName, header))
     }
   }
 

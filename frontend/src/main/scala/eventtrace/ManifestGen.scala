@@ -52,6 +52,13 @@ private[eventtrace] object ManifestGen {
        |""".stripMargin
   }
 
+  /** The SHA-256 of a manifest's UTF-8 text, in hex, which the trace's header carries. */
+  def sha256(manifest: String): String =
+    java.security.MessageDigest.getInstance("SHA-256")
+      .digest(manifest.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+      .map(b => f"${b & 0xff}%02x")
+      .mkString
+
   private def quote(s: String): String = s.flatMap {
     case '"'           => "\\\""
     case '\\'          => "\\\\"

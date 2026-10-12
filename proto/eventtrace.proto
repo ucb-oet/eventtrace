@@ -1,0 +1,42 @@
+// The EventTrace trace format: one schema for every design. The design's manifest, written at elaboration, names
+// what the numbers here refer to: each site's event, each event's fields in order, and each enum's variants.
+//
+// A trace is a sequence of Records, each preceded by its length as a varint, as in protobuf's delimited streams.
+// The first Record is a Header; each later one holds the events of one cycle that had any.
+syntax = "proto3";
+
+package eventtrace;
+
+message Record {
+  oneof record {
+    Header header = 1;
+    Cycle cycle = 2;
+  }
+}
+
+message Header {
+  // Of this format; 1.
+  uint32 version = 1;
+  // SHA-256 of the manifest describing this design, in hex, so that a trace is not read with another's manifest.
+  string manifest_sha256 = 2;
+}
+
+// The events of one clock edge, in event ID order. Event IDs count from 0 through the whole trace, so the first
+// event of a cycle has the ID after the previous cycle's last.
+message Cycle {
+  // Clock edges since the simulation started.
+  uint64 cycle = 1;
+  repeated Event events = 2;
+}
+
+message Event {
+  // The manifest's sites table gives the site's event name, instance path, and source location.
+  uint32 site_id = 1;
+  // The ID of the event's subject, if the manifest gives the event one; its object type is the event's subject type.
+  uint64 subject = 2;
+  // The values of the event's present fields, in the order the manifest lists its fields. A UInt, Bool, or enum is
+  // its value, an Id the object's ID, and an SInt its two's-complement value ZigZag-encoded, as sint64 is.
+  repeated uint64 values = 3;
+  // Bit i is set when the event's field i, in the manifest's order, is absent: DontCare at this site.
+  uint64 absent = 4;
+}

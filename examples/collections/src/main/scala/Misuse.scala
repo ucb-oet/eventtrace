@@ -5,6 +5,8 @@ import circt.stage.ChiselStage
 import eventtrace.EventTrace
 import eventtrace.EventTrace.syntax._
 
+import java.nio.file.{Files, Paths}
+
 class Cell extends EventTrace.ObjectType("cell") {
   val key   = const(UInt(4.W))
   val once  = setOnce(UInt(4.W))
@@ -61,4 +63,5 @@ object MisuseMain extends App {
     args = Array("--target-dir", targetDir, "--split-verilog"),
     firtoolOpts = Array("-disable-all-randomization", "-strip-debug-info")
   )
+  Files.writeString(Paths.get(targetDir, "eventtrace_manifest.json"), EventTrace.manifest)
 }

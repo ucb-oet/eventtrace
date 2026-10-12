@@ -26,15 +26,21 @@ export CHISEL_FIRTOOL_PATH ?= $(patsubst %/,%,$(dir $(shell command -v firtool))
 # The frontend's sources include the runtime's C++, which it ships as resources.
 SCALA_SOURCES := $(shell find $(EVENTTRACE_DIR)/frontend/src src -type f)
 
+# Prints a trace as text, given its manifest.
+DUMP := python3 $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py
+
 .PHONY: check run clean
-# Each check reads the manifest first, then the records.
+# Each check reads the manifest first, then the trace as text.
 check: $(BUILD_DIR)/run.log
 	awk -f check.awk $(RTL_DIR)/eventtrace_manifest.json $<
 
 run: $(BUILD_DIR)/run.log
 
-$(BUILD_DIR)/run.log: $(SIM)
+$(BUILD_DIR)/run.trace: $(SIM)
 	$(SIM) +eventtrace=$@
+
+$(BUILD_DIR)/run.log: $(BUILD_DIR)/run.trace $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py
+	$(DUMP) $(RTL_DIR)/eventtrace_manifest.json $< > $@
 
 # Start from an empty directory, since the simulator build compiles every .sv and .cc file in it.
 $(RTL): $(SCALA_SOURCES) $(EVENTTRACE_DIR)/build.sbt

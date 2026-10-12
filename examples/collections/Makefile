@@ -24,4 +24,4 @@ $(VIOLATIONS): violations.cc $(MISUSE_DIR)/eventtrace_sites.h
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(MISUSE_DIR) -o $@ violations.cc $(MISUSE_DIR)/eventtrace_runtime.cc
 
 check-violations: $(VIOLATIONS)
-	$(VIOLATIONS)
+	$(VIOLATIONS) $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py $(MISUSE_DIR)/eventtrace_manifest.json $(BUILD_DIR)

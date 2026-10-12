@@ -30,6 +30,10 @@ struct Scenario {
   const char* records;                           // for a passing run, part of its expected records
 };
 
+// From the command line: the dump tool, which prints a trace as text, the fixture's manifest, and a directory for
+// the scenarios' traces.
+std::string dump_tool, manifest, trace_dir;
+
 std::string drain(int fd) {
   std::string s;
   char buffer[4096];
@@ -38,30 +42,40 @@ std::string drain(int fd) {
   return s;
 }
 
-bool run(const Scenario& s) {
-  int out[2], err[2];
-  if (pipe(out) != 0 || pipe(err) != 0) std::abort();
+// The trace at `path` as text.
+std::string text_of(const std::string& path) {
+  const std::string command = "python3 " + dump_tool + " " + manifest + " " + path;
+  std::FILE* pipe = popen(command.c_str(), "r");
+  if (!pipe) std::abort();
+  std::string text;
+  char buffer[4096];
+  for (std::size_t n; (n = std::fread(buffer, 1, sizeof buffer, pipe)) > 0;) text.append(buffer, n);
+  pclose(pipe);
+  return text;
+}
+
+bool run(const Scenario& s, std::size_t index) {
+  const std::string trace = trace_dir + "/violation" + std::to_string(index) + ".trace";
+  int err[2];
+  if (pipe(err) != 0) std::abort();
   const pid_t pid = fork();
   if (pid == 0) {
-    dup2(out[1], 1);
     dup2(err[1], 2);
     eventtrace::sites::Tracker tracker;
     eventtrace::Runtime runtime(tracker);
-    runtime.open("/dev/stdout");
+    runtime.open(trace.c_str());
     for (std::size_t cycle = 0; cycle < s.cycles.size(); ++cycle)
       for (const std::string& name : s.cycles[cycle]) runtime.accept(static_cast<long long>(cycle), site(name), nullptr, 0);
     runtime.finish();
     std::exit(0);
   }
-  close(out[1]);
   close(err[1]);
-  // The children write little, so reading one pipe after the other cannot block them.
-  const std::string records = drain(out[0]);
   const std::string errors = drain(err[0]);
   int status = 0;
   waitpid(pid, &status, 0);
   const bool aborted = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
   const bool finished = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  const std::string records = finished ? text_of(trace) : std::string();
   bool ok;
   if (s.violation) ok = aborted && errors.find(s.violation) != std::string::npos;
   else ok = finished && errors.empty() && records.find(s.records) != std::string::npos;
@@ -72,7 +86,14 @@ bool run(const Scenario& s) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc != 4) {
+    std::fprintf(stderr, "usage: %s <dump tool> <manifest> <trace directory>\n", argv[0]);
+    return 2;
+  }
+  dump_tool = argv[1];
+  manifest = argv[2];
+  trace_dir = argv[3];
   for (unsigned s = 0; s < eventtrace::sites::kSiteCount; ++s)
     if (eventtrace::sites::kPayloadWords[s] != 0) {
       std::printf("FAIL: site %u has a payload, which these synthetic records do not supply\n", s);
@@ -115,7 +136,7 @@ int main() {
   };
 
   int failures = 0;
-  for (const Scenario& s : scenarios) failures += !run(s);
+  for (std::size_t i = 0; i < scenarios.size(); ++i) failures += !run(scenarios[i], i);
   if (failures) {
     std::printf("FAIL: %d of %zu scenarios\n", failures, scenarios.size());
     return 1;

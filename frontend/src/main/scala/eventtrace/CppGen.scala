@@ -4,18 +4,19 @@ package eventtrace
   *
   *  - `eventtrace::generated`: what consumers see, with names exactly as written. One struct per event name, with
   *    fields sorted by name, and one enum class per `ChiselEnum` in `generated::enums`.
-  *  - `eventtrace::text`: the text consumer, one overloaded `print` per event and a `name` per enum.
+  *  - `eventtrace::proto`: one overloaded `encode` per event, which writes it to the trace in protobuf's wire
+  *    format: its subject, and its present fields' values in the manifest's order.
   *  - `eventtrace::sites`: runtime internals. Each site's payload word count, a decoder per site, because a site's
   *    payload layout is internal and may differ between sites of one event, the tracked objects of each type that a
   *    collection holds, and `Tracker`, whose handler for each site resolves its queries, stages its effects, and
-  *    hands its records to the text consumer.
+  *    writes its events to the trace.
   *
   * An event with a subject sits in a namespace named after its object type, so `packet.arrive` is
   * `generated::packet::arrive`.
   *
   * Keeping helpers out of `generated` means no event name can clash with them. Decoders are straight-line shifts and
   * masks with constant offsets, which stay fast even at the `-Os` level Verilator builds with: about 1 ns per record
-  * when measured, against about 110 ns to print one. Each query compiles into its site's handler as a scan over the
+  * when measured. Each query compiles into its site's handler as a scan over the
   * collection's members.
   */
 private[eventtrace] object CppGen {
@@ -30,7 +31,12 @@ private[eventtrace] object CppGen {
     else if (CppKeywords(name)) Some("names must not be C++ keywords")
     else None
 
-  def header(sites: Seq[SiteLayout], objectTypes: Seq[ObjectTypeInfo], collections: Seq[CollectionInfo]): String = {
+  def header(
+    sites:          Seq[SiteLayout],
+    objectTypes:    Seq[ObjectTypeInfo],
+    collections:    Seq[CollectionInfo],
+    manifestSha256: String
+  ): String = {
     val events = EventSchema.fromSites(sites)
     val enumDefs = (sites.flatMap(_.fields.flatMap(_.enumDef)) ++ objectTypes.flatMap(_.fields.flatMap(_.tpe.enumDef)))
       .distinct.sortBy(_.name)
@@ -91,19 +97,21 @@ private[eventtrace] object CppGen {
        |${eventTypes.mkString("\n")}
        |}  // namespace generated
        |
-       |// ---- The text consumer: one line per record, leaving out absent fields.
+       |// ---- The trace writer: each event's subject, and its present fields' values in the manifest's order.
        |
-       |namespace text {
+       |namespace proto {
        |
-       |${enumDefs.map(enumName).mkString("\n")}
-       |${events.map(eventPrinter).mkString("\n")}
-       |}  // namespace text
+       |${events.map(eventEncoder).mkString("\n")}
+       |}  // namespace proto
        |
        |// ---- Runtime internals: each site's payload layout and handler, and the tracked objects.
        |
        |namespace sites {
        |
        |constexpr unsigned kSiteCount = ${ordered.length};
+       |
+       |// SHA-256 of this design's manifest, which the trace's header carries.
+       |constexpr const char* kManifestSha256 = "$manifestSha256";
        |
        |// Payload words and event names per site, indexed by site ID.
        |constexpr unsigned kPayloadWords[] = {$words};
@@ -130,6 +138,7 @@ private[eventtrace] object CppGen {
        |  unsigned payload_words(unsigned site) const override { return kPayloadWords[site]; }
        |  const char* site_name(unsigned site) const override { return kSiteNames[site]; }
        |  unsigned object_type_count() const override { return kObjectTypeCount; }
+       |  const char* manifest_sha256() const override { return kManifestSha256; }
        |
        |  void handle(Runtime& rt, unsigned site, [[maybe_unused]] const uint32_t* w) override {
        |    switch (site) {
@@ -168,21 +177,28 @@ private[eventtrace] object CppGen {
        |""".stripMargin
   }
 
-  private def eventPrinter(e: EventSchema): String = {
-    val head = s"""  std::fprintf(out, "eventtrace cycle=%lld event_id=%llu site_id=%u ${printfText(e.name)}", cycle, event_id, site);"""
-    val subject = e.subject.map(t => s"""  std::fprintf(out, " subject=$t#%llu", e.subject);""").toSeq
-    val fields = e.fields.map { f =>
-      val optional = e.optional(f.name)
-      val value = if (optional) s"(*e.${f.name})" else s"e.${f.name}"
-      val call = f.idOf match {
-        case Some(t) => s"""std::fprintf(out, " ${f.name}=$t#%llu", $value);"""
-        case None    => s"""std::fprintf(out, " ${f.name}=%${printfConversion(f)}, ${printfArgument(f, value)});"""
-      }
-      if (optional) s"  if (e.${f.name}) $call" else s"  $call"
+  /** Writes one event to the trace: its subject, its present fields' values in the manifest's order, and the
+    * positions of its absent fields, which the trace marks in a 64-bit mask.
+    */
+  private def eventEncoder(e: EventSchema): String = {
+    e.fields.zipWithIndex.find { case (f, i) => i >= 64 && e.optional(f.name) }.foreach { case (f, i) =>
+      throw new IllegalArgumentException(
+        s"field ${f.name} of event ${e.name} is DontCare at some site, but is its field ${i + 1}; the trace marks absent " +
+          "fields in a 64-bit mask, so only the first 64 fields may be DontCare"
+      )
     }
-    s"""inline void print(std::FILE* out, long long cycle, unsigned long long event_id, unsigned site, const ${eventRef(e)}& e) {
-       |${(head +: (subject ++ fields)).mkString("\n")}
-       |  std::fputc('\\n', out);
+    val subject = e.subject.map(_ => "  out.subject(e.subject);").toSeq
+    val fields = e.fields.zipWithIndex.map { case (f, i) =>
+      val optional = e.optional(f.name)
+      val value = if (optional) s"*e.${f.name}" else s"e.${f.name}"
+      // An SInt is ZigZag-encoded, as sint64 is; anything else, including an enum or an ID, is its plain value.
+      val call = if (f.signed) s"out.value_signed(int64_t($value));" else s"out.value(uint64_t($value));"
+      if (optional) s"  if (e.${f.name}) $call else out.absent($i);" else s"  $call"
+    }
+    s"""inline void encode(TraceWriter& out, unsigned site, const ${eventRef(e)}& e) {
+       |  out.begin(site);
+       |${(subject ++ fields).mkString("\n")}
+       |  out.end();
        |}
        |""".stripMargin
   }
@@ -225,10 +241,10 @@ private[eventtrace] object CppGen {
   private def siteHandler(s: SiteLayout, e: EventSchema, stored: Map[String, ObjectTypeInfo]): String = {
     val signature = s"  void site${s.id}(Runtime& rt, [[maybe_unused]] const uint32_t* w) {"
     val comment = s"""  // Site ${s.id}: "${s.name}" in ${commentText(s.instance)} at ${commentText(s.location)}"""
-    val print = s"text::print(rt.out(), rt.cycle(), event, ${s.id}, e);"
+    val print = s"proto::encode(rt.writer(), ${s.id}, e);"
     val body = s.plan match {
       case None =>
-        Seq("const auto e = decodeSite" + s.id + "(w);", "const unsigned long long event = rt.next_event_id();", print)
+        Seq("const auto e = decodeSite" + s.id + "(w);", "[[maybe_unused]] const unsigned long long event = rt.next_event_id();", print)
       case Some(plan) => new HandlerGen(s, e, plan, stored).lines(print)
     }
     (Seq(comment, signature) ++ body.map("    " + _) ++ Seq("  }")).mkString("", "\n", "\n")
@@ -258,7 +274,7 @@ private[eventtrace] object CppGen {
             case None => Seq(s"e.subject = rt.create(object_types::$typeName);")
           }
           Seq(s"auto e = decodeSite${s.id}(w);") ++ operands ++ others.map(resolve) ++
-            Seq("const unsigned long long event = rt.next_event_id();") ++ create ++ references ++ effects :+ print
+            Seq("[[maybe_unused]] const unsigned long long event = rt.next_event_id();") ++ create ++ references ++ effects :+ print
         case Some(Binding.EachMember(view, _)) =>
           // Resolve before the loop only what the view needs; the rest may depend on the member.
           val before = closure(Queries.handles(view))
@@ -284,7 +300,7 @@ private[eventtrace] object CppGen {
         s"""assign(rt, ${s.id}, event, *$subjectVar, $bit, "${f.name}", $taken, [o = $subjectVar, v = ${value(f)}] { o->${f.name} = v; });"""
       }
       subject.map(_ => s"e.subject = $subjectVar->id;").toSeq ++ references ++
-        Seq("const unsigned long long event = rt.next_event_id();") ++ assigns ++ effects :+ print
+        Seq("[[maybe_unused]] const unsigned long long event = rt.next_event_id();") ++ assigns ++ effects :+ print
     }
 
     /** Event fields holding an object's ID; the subject's is already in the record. */
@@ -399,27 +415,6 @@ private[eventtrace] object CppGen {
        |""".stripMargin
   }
 
-  /** The variant's name, or `Mode(3)` for a value that is not a variant, which a hardware register can hold. */
-  private def enumName(d: EnumDef): String = {
-    val qualified = s"generated::enums::${d.name}"
-    val cases = d.variants.map { case (variant, _) => s"""    case $qualified::$variant: return "$variant";""" }
-    s"""inline std::string name($qualified v) {
-       |  switch (v) {
-       |${cases.mkString("\n")}
-       |  }
-       |  return "${d.name}(" + std::to_string(static_cast<unsigned long long>(v)) + ")";
-       |}
-       |""".stripMargin
-  }
-
-  /** The printf conversion after `%`: an enum prints as its variant's name. */
-  private def printfConversion(f: FieldLayout): String =
-    if (f.enumDef.isDefined) "s\"" else s"\" ${if (f.signed) "PRId64" else "PRIu64"}"
-
-  private def printfArgument(f: FieldLayout, value: String): String =
-    if (f.enumDef.isDefined) s"name($value).c_str()"
-    else s"${if (f.signed) "int64_t" else "uint64_t"}($value)"
-
   private def unsignedType(width: Int): String = s"uint${Seq(8, 16, 32, 64).find(_ >= width).get}_t"
 
   private def cType(t: FieldType): String = {
@@ -467,8 +462,6 @@ private[eventtrace] object CppGen {
   }
 
   private def hex(v: BigInt): String = s"0x${v.toString(16)}ull"
-
-  private def printfText(s: String): String = cString(s).replace("%", "%%")
 
   private def cString(s: String): String = s.flatMap {
     case '"'                  => "\\\""
