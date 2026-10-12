@@ -2,6 +2,8 @@
 
 mod disasm;
 mod perfetto;
+mod view;
+mod waterfall;
 
 use std::fs::File;
 use std::io::{self, BufWriter, ErrorKind, Write};
@@ -39,12 +41,25 @@ enum Command {
         /// The Perfetto trace to write
         output: PathBuf,
     },
+    /// Converts a trace into a waterfall file for the illilouette viewer: one row per object, with its stages,
+    /// label, how it ended, and its events, all already derived.
+    Waterfall {
+        /// The design's view, such as reader/sodor/view.json
+        view: PathBuf,
+        /// The design's manifest
+        manifest: PathBuf,
+        /// The trace, a file or a named pipe
+        trace: PathBuf,
+        /// The waterfall file to write
+        output: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Dump { manifest, trace } => dump(&manifest, &trace),
-        Command::Perfetto { view, manifest, trace, output } => convert(&view, &manifest, &trace, &output),
+        Command::Perfetto { view, manifest, trace, output } => convert(&view, &manifest, &trace, &output, false),
+        Command::Waterfall { view, manifest, trace, output } => convert(&view, &manifest, &trace, &output, true),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -74,10 +89,16 @@ fn output_error(e: io::Error) -> Result<()> {
     }
 }
 
-fn convert(view: &Path, manifest: &Path, trace: &Path, output: &Path) -> Result<()> {
-    let view = perfetto::View::load(view)?;
+/// Converts a trace through a view into Perfetto's format or a waterfall file.
+fn convert(view: &Path, manifest: &Path, trace: &Path, output: &Path, waterfall: bool) -> Result<()> {
+    let view = view::View::load(view)?;
     let manifest = Manifest::load(manifest)?;
     let events = Events::open(&manifest, trace)?;
-    let out = File::create(output).map_err(|e| Error(format!("cannot create {}: {e}", output.display())))?;
-    perfetto::convert(&view, &manifest, events, BufWriter::new(out))
+    let out = BufWriter::new(File::create(output).map_err(|e| Error(format!("cannot create {}: {e}", output.display())))?);
+    if waterfall {
+        let title = trace.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        waterfall::convert(&view, &manifest, events, title, out)
+    } else {
+        perfetto::convert(&view, &manifest, events, out)
+    }
 }

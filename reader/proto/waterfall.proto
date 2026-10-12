@@ -1,0 +1,105 @@
+// A copy of illilouette's proto/waterfall.proto, which illilouette owns: the format of the files that
+// `eventtrace waterfall` writes for its viewer. Copied on 2026-10-12, before illilouette's first commit. illilouette
+// keeps its field numbers stable, so a copy that lags it still writes files the viewer reads.
+//
+// The waterfall file: what a post-processor writes from an EventTrace trace, its manifest, and the design's view
+// configuration, and what the viewer loads as it is. Everything the viewer draws is already derived here, so the
+// viewer applies none of the trace's rules.
+//
+// A file is one Waterfall message. TODO: a chunked, indexed layout for large files, served by row range.
+syntax = "proto3";
+
+package illilouette;
+
+message Waterfall {
+  // Of this format; 1.
+  uint32 version = 1;
+  // What the file shows, such as "rv32mi-p-illegal.trace".
+  string title = 2;
+  // The first and last cycles with any event in the trace.
+  uint64 first_cycle = 3;
+  uint64 last_cycle = 4;
+  // Every text in the file, each once; other messages name a text by its index here. Index 0 is the empty text.
+  repeated string strings = 5;
+  repeated Site sites = 6;
+  // Object types, in the order the viewer offers them.
+  repeated Type types = 7;
+  // In display order.
+  repeated Row rows = 8;
+}
+
+// Where events are emitted. Texts by index.
+message Site {
+  // The event's name, such as "instruction.stall".
+  uint32 event = 1;
+  // The Chisel instance path of the module that emits it.
+  uint32 instance = 2;
+  // The source location, such as "generators/riscv-sodor/src/main/scala/sodor/rv32_5stage/dpath.scala:395".
+  uint32 source = 3;
+}
+
+message Type {
+  // Text index of its name, such as "instruction".
+  uint32 name = 1;
+  // Text indices of its stages, in pipeline order. A stage's color follows its position.
+  repeated uint32 stages = 2;
+}
+
+// One object.
+message Row {
+  // Index into Waterfall.types.
+  uint32 type = 1;
+  // The object's ID.
+  uint64 id = 2;
+  // Text indices of its label, such as its PC and disassembly. Empty for what the trace does not give, such as the
+  // fields of an object created before a window.
+  repeated uint32 label = 3;
+  // Its stages in order. A segment lasts from its `from` until the next segment's `from`, or until the row's end.
+  repeated Segment segments = 4;
+  // The first cycle after the object's life. Absent while the object is still live when the trace ends.
+  optional uint64 end = 5;
+  // Text index of the name of the event that ended it, such as "squash"; 0 while it is live.
+  uint32 ended_by = 6;
+  // Whether that event is its type's normal end. False for an object that left without, for example, retiring.
+  bool normal_end = 7;
+  // The fields its create event set, other than its stage.
+  repeated Field fields = 8;
+  repeated Event events = 9;
+}
+
+message Segment {
+  // The first cycle in the stage.
+  uint64 from = 1;
+  // Index into its type's stages.
+  uint32 stage = 2;
+  // How many cycles, counting from `from`, the object was held in the stage: every cycle but the last, in which it
+  // moves on. 0 for the stage of an object still live when the trace ends.
+  uint64 held = 3;
+}
+
+message Event {
+  // The cycle in which it fired.
+  uint64 cycle = 1;
+  // Index into Waterfall.sites.
+  uint32 site = 2;
+  // What it did to its object.
+  oneof effect {
+    // The object enters this stage, by index, from cycle + 1.
+    uint32 enters = 3;
+    // The event describes the object during this cycle.
+    bool observes = 4;
+    // The object's life ends after this cycle.
+    bool ends = 5;
+  }
+  // Its fields other than a stage it sets.
+  repeated Field fields = 6;
+}
+
+message Field {
+  // Text index of its name.
+  uint32 name = 1;
+  // Text index of its value, already formatted, such as "0x800000e4", "Decode", or "#3427".
+  uint32 text = 2;
+  // For a field naming another object in the file: that object's row index.
+  optional uint64 row = 3;
+}

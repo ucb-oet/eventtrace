@@ -1,21 +1,11 @@
 //! Converts a trace into a Perfetto trace of resources: one track per value of an object field, with a slice for each
 //! object while it holds that value. Open the output at https://ui.perfetto.dev.
 //!
-//! A view, a small JSON file per design, gives what the manifest cannot:
-//!
-//!   {"tracks": "stage", "label": "pc", "hide": ["retire"],
-//!    "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv32i"}}
-//!
-//! - object, optional: the object type to draw, which the manifest gives when it has only one.
-//! - tracks: the field whose value is the track an object is on. An enum field's tracks follow its variants' order.
-//! - label, optional: the field naming each slice, by default the object's ID. Every field an object's create event
-//!   sets, but the track, becomes an argument of its slices.
-//! - hide, optional: events of the object not to mark. The others that neither create the object nor carry the track
-//!   field are marked at their cycle, on the subject's track; an Id field of a marked event naming another object of
-//!   the type draws an arrow from a mark on that object's track, such as "stall of instruction#13" on its blocker's.
-//! - disassemble, optional: the create event's fields holding a RISC-V instruction and its PC, and the core's ISA
-//!   string, of which only XLEN and the C extension change decoding. Each slice's label is followed by the
-//!   instruction, as in "0x80000000  j 0x80000050", with a PC-relative target made absolute.
+//! The view, as `view.rs` describes it, gives the field whose values are the tracks and how to label slices. Every
+//! field an object's create event sets, but the track, becomes an argument of its slices. The object's events that
+//! neither create it nor carry the track field, less those the view hides, are marked at their cycle on the subject's
+//! track; an Id field of a marked event naming another object of the type draws an arrow from a mark on that object's
+//! track, such as "stall of instruction#13" on its blocker's.
 //!
 //! An object set to a value at cycle c holds it from cycle c+1, and leaves it at the cycle after the event that moves
 //! or destroys it. Time is one nanosecond per cycle, so Perfetto's time axis reads in cycles. Objects that hold one
@@ -23,16 +13,14 @@
 
 use std::collections::HashMap;
 use std::io::{self, Write};
-use std::path::Path;
 
 use eventtrace::manifest::{EventSchema, FieldSchema, FieldType, Lifecycle};
 use eventtrace::objects::{Cycles, Key, Objects};
 use eventtrace::{Error, Event, Manifest, Result, Value};
 use indexmap::IndexMap;
 use prost::Message;
-use serde::Deserialize;
-
 use crate::disasm::Disassembler;
+use crate::view::View;
 
 /// Perfetto's messages, generated from proto/perfetto.proto.
 mod pb {
@@ -42,32 +30,6 @@ mod pb {
 use pb::track_event::Type;
 
 const SEQUENCE: u32 = 1;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct View {
-    object: Option<String>,
-    tracks: String,
-    label: Option<String>,
-    #[serde(default)]
-    hide: Vec<String>,
-    disassemble: Option<Disassemble>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Disassemble {
-    bits: String,
-    pc: String,
-    isa: String,
-}
-
-impl View {
-    pub fn load(path: &Path) -> Result<View> {
-        let bytes = std::fs::read(path).map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
-        serde_json::from_slice(&bytes).map_err(|e| Error(format!("{} is not a view: {e}", path.display())))
-    }
-}
 
 /// Writes Perfetto TracePackets: track descriptors, then slices and marks in time order.
 struct Writer<W: Write> {
@@ -196,19 +158,8 @@ pub fn convert<W: Write>(
     events: impl Iterator<Item = Result<Event>>,
     out: W,
 ) -> Result<()> {
-    let object_types: Vec<&str> = {
-        let mut types: Vec<&str> = manifest.events.iter().filter_map(|e| e.subject.as_deref()).collect();
-        types.sort();
-        types.dedup();
-        types
-    };
-    let object = match (&view.object, object_types.as_slice()) {
-        (Some(object), _) => object.as_str(),
-        (None, [only]) => only,
-        (None, types) => {
-            return Err(Error(format!("the manifest has object types {types:?}, so the view must name one as `object`")));
-        }
-    };
+    let object = view.object(manifest)?;
+    let labels = view.label.fields();
     let of_object = |e: &&EventSchema| e.subject.as_deref() == Some(object);
     let track_field = manifest
         .events
@@ -315,7 +266,8 @@ pub fn convert<W: Write>(
                 }
             }
             let known = |name: &str| created.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
-            let mut label = view.label.as_deref().and_then(known).unwrap_or_else(|| format!("{object}#{id}"));
+            let named: Vec<String> = labels.iter().filter_map(|&name| known(name)).collect();
+            let mut label = if named.is_empty() { format!("{object}#{id}") } else { named.join(" ") };
             if let Some(asm) = known("asm") {
                 label = format!("{label}  {asm}");
             }
