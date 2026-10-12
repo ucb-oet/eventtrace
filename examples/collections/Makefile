@@ -24,7 +24,7 @@ $(VIOLATIONS): violations.cc $(MISUSE_DIR)/eventtrace_sites.h
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -Werror -I$(MISUSE_DIR) -o $@ violations.cc $(MISUSE_DIR)/eventtrace_runtime.cc
 
 check-violations: $(VIOLATIONS)
-	$(VIOLATIONS) $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py $(MISUSE_DIR)/eventtrace_manifest.json $(BUILD_DIR)
+	$(VIOLATIONS) "$(DUMP)" $(MISUSE_DIR)/eventtrace_manifest.json $(BUILD_DIR)
 
 # A recording window writes the full run's events from the cycle where its start trigger fires through the cycle where
 # its stop trigger fires, which counts only events from the start. Event IDs count from the window's first event, so

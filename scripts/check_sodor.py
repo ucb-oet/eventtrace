@@ -11,8 +11,8 @@ its printf log, and optionally on the plain Sodor5StageConfig too:
 
 then
 
-  check_sodor.py <traced output dir> --manifest <manifest> [--plain <plain output dir>] [--header <eventtrace_sites.h>]
-                 <test>...
+  uv run --project tools/eventtrace/scripts tools/eventtrace/scripts/check_sodor.py \\
+    <traced output dir> --manifest <manifest> [--plain <plain output dir>] [--header <eventtrace_sites.h>] <test>...
 
 The manifest is Chipyard's sims/verilator/generated-src/<long name>/<long name>.eventtrace.json. For each test it reads
 <test>.out, Sodor's per-cycle printf log, and <test>.eventtrace, and checks:

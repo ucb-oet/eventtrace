@@ -31,9 +31,9 @@ struct Scenario {
   const char* records;                           // for a passing run, part of its expected records
 };
 
-// From the command line: the dump tool, which prints a trace as text, the fixture's manifest, and a directory for
-// the scenarios' traces.
-std::string dump_tool, manifest, trace_dir;
+// From the command line: the command that prints a trace as text given its manifest and path, the fixture's
+// manifest, and a directory for the scenarios' traces.
+std::string dump, manifest, trace_dir;
 
 std::string drain(int fd) {
   std::string s;
@@ -45,7 +45,7 @@ std::string drain(int fd) {
 
 // The trace at `path` as text.
 std::string text_of(const std::string& path) {
-  const std::string command = "python3 " + dump_tool + " " + manifest + " " + path;
+  const std::string command = dump + " " + manifest + " " + path;
   std::FILE* pipe = popen(command.c_str(), "r");
   if (!pipe) std::abort();
   std::string text;
@@ -89,10 +89,10 @@ bool run(const Scenario& s, std::size_t index) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::fprintf(stderr, "usage: %s <dump tool> <manifest> <trace directory>\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <dump command> <manifest> <trace directory>\n", argv[0]);
     return 2;
   }
-  dump_tool = argv[1];
+  dump = argv[1];
   manifest = argv[2];
   trace_dir = argv[3];
   for (unsigned s = 0; s < eventtrace::sites::kSiteCount; ++s)

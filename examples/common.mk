@@ -1,6 +1,6 @@
 # Shared build for EventTrace examples: elaborate, build with Verilator, run, and check.
 # An example's Makefile sets SBT_PROJECT, MAIN, and DUT, then includes this file.
-# Run after sourcing Chipyard's env.sh, which provides firtool and verilator.
+# Run after sourcing Chipyard's env.sh, which provides firtool and verilator, with uv installed for the scripts.
 #
 # Elaboration writes everything the simulator compiles into RTL_DIR, as Chipyard's flow would: the RTL, the sinks'
 # SystemVerilog, the runtime and DPI adapter, and the generated eventtrace_sites.h. Each example's main then writes
@@ -26,8 +26,8 @@ export CHISEL_FIRTOOL_PATH ?= $(patsubst %/,%,$(dir $(shell command -v firtool))
 # The frontend's sources include the runtime's C++, which it ships as resources.
 SCALA_SOURCES := $(shell find $(EVENTTRACE_DIR)/frontend/src src -type f)
 
-# Prints a trace as text, given its manifest.
-DUMP := python3 $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py
+# Prints a trace as text, given its manifest. uv installs the scripts' dependencies on first use.
+DUMP := uv run -q --project $(EVENTTRACE_DIR)/scripts $(EVENTTRACE_DIR)/scripts/eventtrace_trace.py
 
 .PHONY: check run clean
 # Each check reads the manifest first, then the trace as text.
