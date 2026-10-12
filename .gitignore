@@ -3,5 +3,3 @@ project/target/
 project/project/
 examples/*/build/
 runtime/build/
-__pycache__/
-.venv/
