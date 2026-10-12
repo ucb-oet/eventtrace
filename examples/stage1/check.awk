@@ -26,6 +26,13 @@ function fail(message) {
   bad = 1
 }
 
+# The value of a hex number, as the dump writes a UInt wider than 16 bits.
+function hex(text,    n, i) {
+  n = 0
+  for (i = 3; i <= length(text); i++) n = n * 16 + index("0123456789abcdef", substr(text, i, 1)) - 1
+  return n
+}
+
 # The counter value at a cycle, or -1 while reset is asserted.
 function count_at(c) {
   if (c >= 3 && c <= 26) return c - 3
@@ -54,7 +61,7 @@ FNR == NR {
   delete f
   name = ""; at = 0
   for (i = 2; i <= NF; i++) {
-    if (split($i, kv, "=") == 2) f[kv[1]] = kv[2]
+    if (split($i, kv, "=") == 2) f[kv[1]] = (kv[2] ~ /^0x/ ? hex(kv[2]) : kv[2])
     else if (name == "") { name = $i; at = i }
   }
   c = f["cycle"] + 0

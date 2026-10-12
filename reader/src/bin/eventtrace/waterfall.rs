@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use eventtrace::manifest::{FieldSchema, FieldType, Lifecycle};
 use eventtrace::objects::Key;
-use eventtrace::text::{self, Style};
+use eventtrace::text;
 use eventtrace::{Error, Event, Events, Manifest, Result, Value};
 use indexmap::IndexMap;
 use prost::Message;
@@ -30,9 +30,6 @@ mod pb {
 use pb::event::Effect;
 
 const FORMAT_VERSION: u32 = 1;
-
-/// Values as text, with addresses in hex, and object IDs without their type, since a file draws one type of object.
-const STYLE: Style = Style { bare_ids: true, wide_hex: true };
 
 /// The file's text table: each text once, index 0 the empty text.
 struct Texts {
@@ -91,7 +88,7 @@ fn convert<W: Write>(
     let track_type = *field_types
         .get(track)
         .ok_or_else(|| Error(format!("no event of {object} sets a field named {track}")))?;
-    let text_of = |name: &str, value: Value| text::value(manifest, field_types[name], value, STYLE).to_string();
+    let text_of = |name: &str, value: Value| text::value(manifest, field_types[name], value).to_string();
     let present = |e: &Event| -> Vec<(&str, Value)> {
         e.present_fields(manifest).map(|(f, v)| (f.name.as_str(), v)).collect()
     };

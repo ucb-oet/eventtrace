@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use eventtrace::manifest::{EventSchema, FieldType, Lifecycle};
 use eventtrace::objects::{Cycles, Key, Objects};
-use eventtrace::text::{self, Style};
+use eventtrace::text;
 use eventtrace::{Error, Event, Events, Manifest, Result, Value};
 use indexmap::IndexMap;
 use prost::Message;
@@ -125,12 +125,9 @@ struct Slice {
     track: u64,
 }
 
-/// Values as text, with addresses in hex.
-const STYLE: Style = Style { bare_ids: false, wide_hex: true };
-
 /// An event's present fields, as (name, text).
 fn fields(manifest: &Manifest, event: &Event) -> Vec<(String, String)> {
-    event.present_fields(manifest).map(|(f, v)| (f.name.clone(), text::value(manifest, f, v, STYLE).to_string())).collect()
+    event.present_fields(manifest).map(|(f, v)| (f.name.clone(), text::value(manifest, f, v).to_string())).collect()
 }
 
 #[derive(clap::Args)]
@@ -250,7 +247,7 @@ fn convert<W: Write>(
         }
         for (id, value) in begins {
             let key = Key { object_type: object, id };
-            let title = text::value(manifest, track_field, value, STYLE).to_string();
+            let title = text::value(manifest, track_field, value).to_string();
             let (lane, track) = resources.take(&mut writer, value, &title)?;
             slices.insert(id, Slice { value, lane, track });
             // The fields its create event set, but the track, and the instruction they hold.
