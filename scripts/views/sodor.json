@@ -1,0 +1,8 @@
+{
+  "object": "instruction",
+  "tracks": "stage",
+  "label": "pc",
+  "instants": ["stall", "mem_wait", "squash", "flush", "trap"],
+  "flows": {"stall": "blocker", "squash": "by"},
+  "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv32i"}
+}
