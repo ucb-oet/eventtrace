@@ -85,6 +85,7 @@ END {
     request_done = pending && k % 4 == 3
     if (issue_request) emit_request(13, "issue", next_request++, sprintf("insn=instruction#%d", exeId))
     if (request_done) emit_request(14, "done", next_request - 1, "")
+    if (k % 5 == 1 && decV) emit(15, "pick", int(k / 2) % 2 ? member[0] : decId, "")
 
     # The edge.
     if (enter) pc[new_id] = k
@@ -109,7 +110,7 @@ END {
         "{\"name\": \"Stage\", \"values\": {\"Decode\": 0, \"Execute\": 1, \"Writeback\": 2}}", entries, "|")
   for (i in entries)
     if (!index(manifest, entries[i])) fail("the manifest lacks " entries[i])
-  split("decode issue writeback retire squash stall sample second youngest busy crowd idle request.issue request.done",
+  split("decode issue writeback retire squash stall sample second youngest busy crowd idle request.issue request.done pick",
         names, " ")
   for (i in names)
     if (!seen[names[i]]) fail("the model never expects " names[i] ", so the run does not cover it")
@@ -119,5 +120,6 @@ END {
     seen["retire"] " retired and " seen["squash"] " squashed through queries on one collection, " seen["stall"] \
     " stalls naming their blockers, " seen["sample"] " samples in ranked order, and tests on view sizes keeping " \
     seen["busy"] " busy, " seen["crowd"] " crowd, and " seen["idle"] " idle records, and " seen["request.issue"] \
-    " requests keeping the ID of the instruction that issued them"
+    " requests keeping the ID of the instruction that issued them; " seen["pick"] " picks by a query with a " \
+    "hardware Bool as a term"
 }

@@ -156,6 +156,10 @@ sealed trait Pred {
   def &&(that: Pred): Pred = Pred.And(this, that)
   def ||(that: Pred): Pred = Pred.Or(this, that)
   def unary_! : Pred = Pred.Not(this)
+
+  /** A hardware `Bool` as a term, as in `where(p => p.stage =/= Stage.Buffer || rvc)`; it travels in the payload. */
+  def &&(that: Bool)(implicit sourceInfo: SourceInfo): Pred = Pred.And(this, Pred.holds(that, sourceInfo))
+  def ||(that: Bool)(implicit sourceInfo: SourceInfo): Pred = Pred.Or(this, Pred.holds(that, sourceInfo))
 }
 
 private[eventtrace] object Pred {
@@ -163,6 +167,12 @@ private[eventtrace] object Pred {
   final case class And(left: Pred, right: Pred) extends Pred
   final case class Or(left: Pred, right: Pred) extends Pred
   final case class Not(pred: Pred) extends Pred
+
+  /** A `Bool` as a predicate: it equals true. */
+  def holds(b: Bool, sourceInfo: SourceInfo): Pred = {
+    val bool = FieldType(1, signed = false, isBool = true, None)
+    Compare(CompareOp.Eq, Queries.value(bool, b, "a Bool term", sourceInfo), Operand.Literal(1, bool))
+  }
 }
 
 /** A comparison as written in diagnostics, and its C++ helper in `eventtrace::query`. */

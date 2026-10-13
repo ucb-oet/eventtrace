@@ -136,6 +136,12 @@ class Pipeline extends Module {
     val r = requests.head
     r.event("done") { requests.remove(r); r.destroy() }
   }
+  // Site 15: a hardware Bool as a term of a query, which travels in the payload: with bit 1 of the counter set, the
+  // oldest instruction, else the one in decode.
+  when (count % 5.U === 1.U && decV) {
+    val i = active.where(j => j.stage === Stage.Decode || count(1)).head
+    i.event("pick") {}
+  }
 }
 
 object Main extends App {
