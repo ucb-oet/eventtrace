@@ -132,7 +132,18 @@ object Rejects extends App {
       val a = active.head; val b = active.last
       a.event("r_end") { active.remove(a); a.destroy() }
       b.event("r_end") {}
-    }, "disagree on creating or destroying their subject")
+    }, "disagree on creating or destroying their subject"),
+    ("ID field after creation", design { (_, _, active) =>
+      val r = EventTrace.collection(new Request).head
+      r.event("r_late") { r.insn := active.head }
+    }, "request.insn := assigns a const field outside its object's create block"),
+    ("ID field left Absent", design { (_, _, _) =>
+      Request.create(event = "r_no_insn") { r => r.insn := Absent }
+    }, "does not initialize const field(s) insn; Absent does not count"),
+    ("ID of another type", design { (_, _, _) =>
+      val other = EventTrace.collection(new Request).head
+      Request.create(event = "r_wrong") { r => r.insn := other.id }
+    }, "assigns the ID of an object of type request to a field holding IDs of type instruction")
   )
 
   val outside =

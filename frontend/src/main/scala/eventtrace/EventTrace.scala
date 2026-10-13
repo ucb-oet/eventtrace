@@ -473,20 +473,40 @@ object EventTrace {
   /** Records an assignment to a field of the open event's subject; `None` is `Absent`. */
   private[eventtrace] def assignField(field: ObjectField, value: Option[Data], sourceInfo: SourceInfo): Unit = {
     val what = s"${field.owner.typeName}.${field.name} :="
-    checkHandle(what, field.owner, sourceInfo)
-    val open = subjectEvent(what, field.owner, sourceInfo)
-    if (field.property == FieldProperty.Const && !open.created && value.isDefined)
-      elaborationError(s"$what assigns a const field outside its object's create block", sourceInfo)
-    open.entries.find(_.name == field.name).foreach { e =>
-      if (e.objectField) elaborationError(s"$what assigns the field a second time in one block", sourceInfo)
-      else elaborationError(s"$what has the name of an event field this block captures", sourceInfo)
-    }
-    open.entries += (value match {
+    addAssignment(what, field, value.isDefined, sourceInfo)(value match {
       case None => Entry(field.name, Unset, Some(field.tpe), Some(field))
       case Some(v) =>
         val extended = extend(what, field.tpe, v, sourceInfo)
         Entry(field.name, v.litOption.map(Literal).getOrElse(Hardware(extended)), Some(field.tpe), Some(field))
     })
+  }
+
+  /** Records the ID of the object `handle` resolves to as a field of the open event's subject. */
+  private[eventtrace] def assignId(field: ObjectField, handle: ObjectType, sourceInfo: SourceInfo): Unit = {
+    val what = s"${field.owner.typeName}.${field.name} :="
+    addAssignment(what, field, assigns = true, sourceInfo) {
+      checkHandle(what, handle, sourceInfo)
+      val held = field.tpe.idOf.get
+      if (handle.typeName != held)
+        elaborationError(
+          s"$what assigns the ID of an object of type ${handle.typeName} to a field holding IDs of type $held",
+          sourceInfo
+        )
+      Entry(field.name, Ref(handle), Some(field.tpe), Some(field))
+    }
+  }
+
+  /** Adds `entry`, an assignment to `field` of the open event's subject, once the rules for every assignment hold. */
+  private def addAssignment(what: String, field: ObjectField, assigns: Boolean, sourceInfo: SourceInfo)(entry: => Entry): Unit = {
+    checkHandle(what, field.owner, sourceInfo)
+    val open = subjectEvent(what, field.owner, sourceInfo)
+    if (field.property == FieldProperty.Const && !open.created && assigns)
+      elaborationError(s"$what assigns a const field outside its object's create block", sourceInfo)
+    open.entries.find(_.name == field.name).foreach { e =>
+      if (e.objectField) elaborationError(s"$what assigns the field a second time in one block", sourceInfo)
+      else elaborationError(s"$what has the name of an event field this block captures", sourceInfo)
+    }
+    open.entries += entry
   }
 
   /** Records `add` or `remove` on the open event's subject. */
@@ -552,6 +572,19 @@ object EventTrace {
 
   /** The type of an object field declared from `gen`. */
   private[eventtrace] def typeOf(gen: Data, enumObject: Option[ChiselEnum], name: String, sourceInfo: SourceInfo): FieldType = {
+    val what = checkFieldName(name, sourceInfo)
+    FieldType(knownWidth(what, gen, sourceInfo), gen.isInstanceOf[SInt], gen.isInstanceOf[Bool],
+      enumObject.map(registerEnum(_, sourceInfo)))
+  }
+
+  /** The type of an object field holding the ID of an object of type `objectType`. */
+  private[eventtrace] def idTypeOf(objectType: String, name: String, sourceInfo: SourceInfo): FieldType = {
+    checkFieldName(name, sourceInfo)
+    FieldType.id(objectType)
+  }
+
+  /** Checks an object field's name, and returns how errors describe the field. */
+  private def checkFieldName(name: String, sourceInfo: SourceInfo): String = {
     val what = s"object field $name"
     CppGen.identifierError(name).foreach(reason => elaborationError(s"$what: $reason", sourceInfo))
     if (ReservedFieldNames.contains(name))
@@ -559,8 +592,7 @@ object EventTrace {
         s"$what uses a reserved name; every record already has ${ReservedFieldNames.toSeq.sorted.mkString(", ")}",
         sourceInfo
       )
-    FieldType(knownWidth(what, gen, sourceInfo), gen.isInstanceOf[SInt], gen.isInstanceOf[Bool],
-      enumObject.map(registerEnum(_, sourceInfo)))
+    what
   }
 
   /** The type of a value compared in a query: `known` for a value of an enum field's enum, else its own. */

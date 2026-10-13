@@ -20,6 +20,11 @@ class Instruction extends EventTrace.ObjectType("instruction") {
 }
 object Instruction extends EventTrace.Schema(new Instruction)
 
+class Request extends EventTrace.ObjectType("request") {
+  val insn = const(Id(new Instruction))
+}
+object Request extends EventTrace.Schema(new Request)
+
 /** Collections fixture: a three-stage in-order pipeline, decode, execute, and writeback, whose instructions are
   * tracked in one collection. The counter drives it: when it is 5 mod 11, the instruction in execute squashes the
   * one in decode; when it is 3 mod 7, decode waits a cycle on execute. Every other cycle, a new instruction with the
@@ -114,6 +119,22 @@ class Pipeline extends Module {
     }.otherwise {
       EventTrace.event("idle") { "count" := count }
     }
+  }
+  // Sites 13 and 14: an object keeping another's ID for life. Every 4th cycle the instruction in execute issues a
+  // request, which is done two cycles later, when the instruction may have retired.
+  val requests = EventTrace.collection(new Request)
+  val pending = RegInit(false.B)
+  val issueRequest = exeV && count % 4.U === 1.U
+  val requestDone = pending && count % 4.U === 3.U
+  when (issueRequest) { pending := true.B }
+  when (requestDone) { pending := false.B }
+  when (issueRequest) {
+    val by = active.where(_.stage === Stage.Execute).only
+    Request.create(event = "issue") { r => r.insn := by; requests.add(r) }
+  }
+  when (requestDone) {
+    val r = requests.head
+    r.event("done") { requests.remove(r); r.destroy() }
   }
 }
 

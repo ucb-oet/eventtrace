@@ -69,6 +69,15 @@ abstract class ObjectType(val typeName: String) {
   protected def mutable[T <: EnumType](gen: T)(implicit ev: EnumOf[T], name: sourcecode.Name, sourceInfo: SourceInfo): EnumField[T] =
     declare(new EnumField[T](this, name.value, EventTrace.typeOf(gen, Some(ev.enumObject), name.value, sourceInfo), FieldProperty.Mutable))
 
+  /** A field holding the ID of another object, which the create block sets, as in `val fetch = const(Id(new Fetch))`.
+    * Only a `const` field may hold an ID: it names one object for this object's whole life.
+    */
+  protected def const[T <: ObjectType](gen: IdOf[T])(implicit name: sourcecode.Name, sourceInfo: SourceInfo): IdField[T] =
+    declare(new IdField[T](this, name.value, EventTrace.idTypeOf(gen.typeName, name.value, sourceInfo), FieldProperty.Const))
+
+  /** The type of a field holding the ID of an object of `gen`'s type, which an instance names, as for a collection. */
+  protected def Id[T <: ObjectType](gen: T): IdOf[T] = new IdOf[T](gen.typeName)
+
   private def declare[F <: ObjectField](field: F): F = {
     declared += field
     field
@@ -149,6 +158,18 @@ final class EnumField[T <: EnumType] private[eventtrace] (owner: ObjectType, nam
   def <=(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Le, that)
   def >(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Gt, that)
   def >=(that: EnumField[T])(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ge, that)
+}
+
+/** The type of a field holding the ID of an object of type `T`; see [[ObjectType.Id]]. */
+final class IdOf[T <: ObjectType] private[eventtrace] (private[eventtrace] val typeName: String)
+
+/** A `const` field holding the ID of an object of type `T`. The create block assigns it a handle of that type, as in
+  * `inst.fetch := packet`; queries cannot compare it yet.
+  */
+final class IdField[T <: ObjectType] private[eventtrace] (owner: ObjectType, name: String, tpe: FieldType, property: FieldProperty)
+    extends ObjectField(owner, name, tpe, property) {
+  def :=(handle: T)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignId(this, handle, sourceInfo)
+  def :=(id: IdRef)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignId(this, id.handle, sourceInfo)
 }
 
 /** The companion of an object type, which creates objects: `Packet.create(event = "arrive") { p => ... }`. */

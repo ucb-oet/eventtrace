@@ -19,6 +19,14 @@ function emit(site, name, id, fields) {
   seen[name]++
 }
 
+# One expected record of request `id` at site `site`; `fields` are its fields sorted by name, if any.
+function emit_request(site, name, id, fields) {
+  want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d request.%s subject=request#%d%s",
+                    k + 3, m, site, name, id, fields == "" ? "" : " " fields)
+  m++
+  seen["request." name]++
+}
+
 # One expected record of the subject-less event "idle".
 function emit_idle(site) {
   want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d idle count=%d", k + 3, m, site, k)
@@ -35,7 +43,7 @@ FNR == NR {
 
 END {
   m = 0; next_id = 0
-  decV = 0; exeV = 0; wbV = 0; was_stalled = 0
+  decV = 0; exeV = 0; wbV = 0; was_stalled = 0; pending = 0; next_request = 0
   for (k = 0; k <= 59; k++) {
     kill  = exeV && k % 11 == 5
     stall = decV && exeV && !kill && k % 7 == 3
@@ -72,6 +80,11 @@ END {
         if (members >= 3) for (i = 0; i < members; i++) emit(11, "crowd", member[i], "")
       } else emit_idle(12)
     }
+    # A request names the instruction in execute that issued it, and is done two cycles later.
+    issue_request = exeV && k % 4 == 1
+    request_done = pending && k % 4 == 3
+    if (issue_request) emit_request(13, "issue", next_request++, sprintf("insn=instruction#%d", exeId))
+    if (request_done) emit_request(14, "done", next_request - 1, "")
 
     # The edge.
     if (enter) pc[new_id] = k
@@ -80,6 +93,8 @@ END {
     decV = !kill
     if (enter) { decId = new_id; decPc = k }
     was_stalled = stall
+    if (issue_request) pending = 1
+    if (request_done) pending = 0
   }
 
   if (n != m) fail("expected " m " records, got " n)
@@ -89,17 +104,20 @@ END {
   split("\"name\": \"instruction.retire\",|\"lifecycle\": \"destroy\",|" \
         "{\"name\": \"blocker\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
         "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
+        "\"name\": \"request.issue\",|{\"name\": \"insn\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
         "{\"name\": \"stage\", \"type\": \"Enum\", \"enum\": \"Stage\", \"width\": 2}|" \
         "{\"name\": \"Stage\", \"values\": {\"Decode\": 0, \"Execute\": 1, \"Writeback\": 2}}", entries, "|")
   for (i in entries)
     if (!index(manifest, entries[i])) fail("the manifest lacks " entries[i])
-  split("decode issue writeback retire squash stall sample second youngest busy crowd idle", names, " ")
+  split("decode issue writeback retire squash stall sample second youngest busy crowd idle request.issue request.done",
+        names, " ")
   for (i in names)
-    if (!seen[names[i]]) fail("the model never expects instruction." names[i] ", so the run does not cover it")
+    if (!seen[names[i]]) fail("the model never expects " names[i] ", so the run does not cover it")
 
   if (bad) exit 1
   print "PASS: " n " records match the pipeline model exactly: " seen["decode"] " instructions created, " \
     seen["retire"] " retired and " seen["squash"] " squashed through queries on one collection, " seen["stall"] \
     " stalls naming their blockers, " seen["sample"] " samples in ranked order, and tests on view sizes keeping " \
-    seen["busy"] " busy, " seen["crowd"] " crowd, and " seen["idle"] " idle records"
+    seen["busy"] " busy, " seen["crowd"] " crowd, and " seen["idle"] " idle records, and " seen["request.issue"] \
+    " requests keeping the ID of the instruction that issued them"
 }

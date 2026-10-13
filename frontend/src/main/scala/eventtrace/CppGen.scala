@@ -362,8 +362,13 @@ private[eventtrace] object CppGen {
       case Effect.Destroy   => s"destroy(rt, ${s.id}, event, ${subject.get.typeName}_objects_, *$subjectVar);"
     }
 
-    /** The value this site assigns to the subject's field `f`, from the decoded record. */
-    private def value(f: ObjectField): String = if (e.optional(f.name)) s"*e.${f.name}" else s"e.${f.name}"
+    /** The value this site assigns to the subject's field `f`: the ID of the object a handle resolves to, which a
+      * create block sets before the record's references, or else the decoded record's.
+      */
+    private def value(f: ObjectField): String = s.fields.find(_.name == f.name).map(_.source) match {
+      case Some(Reference(h)) => s"${handleVar(h)}->id"
+      case _                  => if (e.optional(f.name)) s"*e.${f.name}" else s"e.${f.name}"
+    }
 
     /** Declares a chosen handle; `iter` members and new objects are declared where they arise. */
     private def resolve(h: HandlePlan): String = h.binding match {
