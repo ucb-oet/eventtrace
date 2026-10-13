@@ -1,12 +1,13 @@
 //! `eventtrace perfetto`: converts a trace into a Perfetto trace of resources, one track per value of an object field,
 //! with a slice for each object while it holds that value. Open the output at https://ui.perfetto.dev.
 //!
-//! The view, as `view.rs` describes it, gives the field whose values are the tracks and how to label slices. Every
-//! field an object's create event sets, but the track, becomes an argument of its slices. The object's events that
-//! neither create it nor carry the track field, less those the view hides, are marked at their cycle on the subject's
-//! track. An Id field naming another object of the type, in any event the view does not hide, draws an arrow from a
-//! mark on that object's track, such as "stall of instruction#13" on its blocker's, to the event's mark, or, for an
-//! event not marked, to the slice it begins.
+//! The view, as `view.rs` describes it, gives each object type to draw, the field whose values are its tracks, and
+//! how to label its slices; each type's tracks form one group, in the view's order. Every field an object's create
+//! event sets, but the track, becomes an argument of its slices. An object's events that neither create it nor carry
+//! the track field, less those the view hides, are marked at their cycle on the subject's track. An Id field naming an
+//! object of a type drawn, in any event the view does not hide, draws an arrow from a mark on that object's track,
+//! such as "stall of instruction#13" on its blocker's, to the event's mark, or, for an event not marked, to the slice
+//! it begins.
 //!
 //! An object set to a value at cycle c holds it from cycle c+1, and leaves it at the cycle after the event that moves
 //! or destroys it. Time is one nanosecond per cycle, so Perfetto's time axis reads in cycles. Objects that hold one
@@ -16,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 
-use eventtrace::manifest::{EventSchema, FieldType, Lifecycle};
+use eventtrace::manifest::{EventSchema, FieldSchema, FieldType, Lifecycle};
 use eventtrace::objects::{Cycles, Key, Objects};
 use eventtrace::text;
 use eventtrace::{Error, Event, Events, Manifest, Result, Value};
@@ -25,7 +26,7 @@ use prost::Message;
 
 use crate::disasm::Disassembler;
 use crate::output;
-use crate::view::View;
+use crate::view::{self, View};
 
 /// Perfetto's messages, generated from proto/perfetto.proto.
 mod pb {
@@ -144,70 +145,80 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let view = View::load(&args.view)?;
     let manifest = Manifest::load(&args.manifest)?;
+    let views = view::load(&args.view, &manifest)?;
     let events = Events::open(&manifest, &args.trace)?;
-    convert(&view, &manifest, events, output::create(&args.output)?)
+    convert(&views, &manifest, events, output::create(&args.output)?)
+}
+
+/// What a view draws of its object type.
+struct Drawn<'a> {
+    view: &'a View,
+    track_field: &'a FieldSchema,
+    resources: Resources,
+    dasm: Option<Disassembler>,
 }
 
 fn convert<W: Write>(
-    view: &View,
+    views: &[View],
     manifest: &Manifest,
     events: impl Iterator<Item = Result<Event>>,
     out: W,
 ) -> Result<()> {
-    let object = view.object(manifest)?;
-    let labels = view.label.fields();
-    let of_object = |e: &&EventSchema| e.subject.as_deref() == Some(object);
-    let track_field = manifest
-        .events
-        .iter()
-        .filter(of_object)
-        .find_map(|e| e.fields.iter().find(|f| f.name == view.tracks))
-        .ok_or_else(|| Error(format!("no event of {object} has a field {}", view.tracks)))?;
-    for hidden in &view.hide {
-        if !manifest.events.iter().filter(of_object).any(|e| e.short_name() == hidden) {
-            return Err(Error(format!("the view hides {hidden}, which is not an event of {object}")));
-        }
-    }
-    // The object's events that the view does not hide.
-    let shown: Vec<(usize, &EventSchema)> = manifest
-        .events
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| of_object(e))
-        .filter(|(_, e)| !view.hide.iter().any(|h| h == e.short_name()))
-        .collect();
-    // The events marked as instants.
-    let marked: HashSet<usize> = shown
-        .iter()
-        .filter(|(_, e)| e.lifecycle != Some(Lifecycle::Create) && !e.fields.iter().any(|f| f.name == view.tracks))
-        .map(|&(i, _)| i)
-        .collect();
-    // The Id fields of each event that draw arrows.
-    let arrows: HashMap<usize, Vec<&str>> = shown
-        .iter()
-        .map(|&(i, e)| {
-            let ids = e.fields.iter().filter(|f| f.ty == FieldType::Id && f.object.as_deref() == Some(object));
-            (i, ids.map(|f| f.name.as_str()).collect())
-        })
-        .collect();
-    let ranks = match (track_field.ty, &track_field.enum_name) {
-        (FieldType::Enum, Some(enum_name)) => manifest
-            .enums
-            .iter()
-            .find(|e| &e.name == enum_name)
-            .map(|e| e.values.values().enumerate().map(|(i, &v)| (Value::Unsigned(v), i)).collect())
-            .unwrap_or_default(),
-        _ => HashMap::new(),
-    };
-    let mut dasm = view.disassemble.as_ref().map(|d| Disassembler::new(&d.isa)).transpose()?;
-
     let mut writer = Writer { out, next_uuid: 1 };
-    let parent = writer.track(format!("{object} {}", view.tracks), None, None, true)?;
-    let mut resources = Resources { parent, ranks, lanes: HashMap::new(), uuids: HashMap::new() };
+    let mut drawn: IndexMap<&str, Drawn> = IndexMap::new();
+    // The events marked as instants, and the Id fields of each event that draw arrows, with the type each names.
+    let mut marked: HashSet<usize> = HashSet::new();
+    let mut arrows: HashMap<usize, Vec<(&str, &str)>> = HashMap::new();
+    for view in views {
+        let object = view.object.as_str();
+        let of_object = |e: &&EventSchema| e.subject.as_deref() == Some(object);
+        let track_field = manifest
+            .events
+            .iter()
+            .filter(of_object)
+            .find_map(|e| e.fields.iter().find(|f| f.name == view.tracks))
+            .ok_or_else(|| Error(format!("no event of {object} has a field {}", view.tracks)))?;
+        for hidden in &view.hide {
+            if !manifest.events.iter().filter(of_object).any(|e| e.short_name() == hidden) {
+                return Err(Error(format!("the view hides {hidden}, which is not an event of {object}")));
+            }
+        }
+        // The object's events that the view does not hide.
+        let shown = manifest
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| of_object(e))
+            .filter(|(_, e)| !view.hide.iter().any(|h| h == e.short_name()));
+        for (i, e) in shown {
+            if e.lifecycle != Some(Lifecycle::Create) && !e.fields.iter().any(|f| f.name == view.tracks) {
+                marked.insert(i);
+            }
+            let ids = e.fields.iter().filter(|f| f.ty == FieldType::Id);
+            let named = ids.filter_map(|f| {
+                let to = views.iter().find(|v| Some(&v.object) == f.object.as_ref())?;
+                Some((f.name.as_str(), to.object.as_str()))
+            });
+            arrows.insert(i, named.collect());
+        }
+        let ranks = match (track_field.ty, &track_field.enum_name) {
+            (FieldType::Enum, Some(enum_name)) => manifest
+                .enums
+                .iter()
+                .find(|e| &e.name == enum_name)
+                .map(|e| e.values.values().enumerate().map(|(i, &v)| (Value::Unsigned(v), i)).collect())
+                .unwrap_or_default(),
+            _ => HashMap::new(),
+        };
+        let dasm = view.disassemble.as_ref().map(|d| Disassembler::new(&d.isa)).transpose()?;
+        let parent = writer.track(format!("{object} {}", view.tracks), None, None, true)?;
+        let resources = Resources { parent, ranks, lanes: HashMap::new(), uuids: HashMap::new() };
+        drawn.insert(object, Drawn { view, track_field, resources, dasm });
+    }
+
     let mut objects = Objects::new(manifest);
-    let mut slices: IndexMap<u64, Slice> = IndexMap::new();
+    let mut slices: IndexMap<Key, Slice> = IndexMap::new();
     let mut next_flow = 1;
     let mut last = 0;
 
@@ -215,24 +226,22 @@ fn convert<W: Write>(
         let cycle = cycle?;
         last = cycle.cycle;
         // Every event of a cycle sees the state before its clock edge; their changes start at the next cycle.
-        let mut ends: Vec<(u64, Option<&str>)> = Vec::new();
-        let mut begins: Vec<(u64, Value, Vec<u64>)> = Vec::new();
+        let mut ends: Vec<(Key, Option<&str>)> = Vec::new();
+        let mut begins: Vec<(Key, Value, Vec<u64>)> = Vec::new();
         for e in &cycle.events {
             let Some(key) = Key::subject(manifest, e) else { continue };
-            if key.object_type != object {
-                continue;
-            }
+            let Some(d) = drawn.get(key.object_type) else { continue };
             let schema = &manifest.events[e.event];
             let destroys = schema.lifecycle == Some(Lifecycle::Destroy);
-            let value = if destroys { None } else { e.get(manifest, &view.tracks) };
+            let value = if destroys { None } else { e.get(manifest, &d.view.tracks) };
             // The event's arrows end at its mark, on the subject's track, or at the slice it begins.
-            let mark = slices.get(&key.id).filter(|_| marked.contains(&e.event)).map(|slice| slice.track);
+            let mark = slices.get(&key).filter(|_| marked.contains(&e.event)).map(|slice| slice.track);
             let mut flows = Vec::new();
             if mark.is_some() || value.is_some() {
-                for id in arrows.get(&e.event).into_iter().flatten() {
+                for &(id, object_type) in arrows.get(&e.event).into_iter().flatten() {
                     let Some(other) = e.get(manifest, id).and_then(Value::unsigned) else { continue };
-                    if let Some(other) = slices.get(&other) {
-                        let name = format!("{} of {object}#{}", schema.short_name(), key.id);
+                    if let Some(other) = slices.get(&Key { object_type, id: other }) {
+                        let name = format!("{} of {}#{}", schema.short_name(), key.object_type, key.id);
                         writer.event(cycle.cycle, Type::Instant, other.track, Some(name), vec![], vec![next_flow], vec![])?;
                         flows.push(next_flow);
                         next_flow += 1;
@@ -245,41 +254,42 @@ fn convert<W: Write>(
                 writer.event(cycle.cycle, Type::Instant, track, Some(schema.short_name().to_string()), args, vec![], flows)?;
             }
             if destroys {
-                ends.push((key.id, Some(schema.short_name())));
+                ends.push((key, Some(schema.short_name())));
             } else if let Some(value) = value {
-                if slices.contains_key(&key.id) {
-                    ends.push((key.id, None));
+                if slices.contains_key(&key) {
+                    ends.push((key, None));
                 }
-                begins.push((key.id, value, flows));
+                begins.push((key, value, flows));
             }
         }
         objects.commit(&cycle);
-        for (id, how) in ends {
-            if let Some(slice) = slices.shift_remove(&id) {
+        for (key, how) in ends {
+            if let Some(slice) = slices.shift_remove(&key) {
                 let args = how.map(|how| vec![("end".to_string(), how.to_string())]).unwrap_or_default();
                 writer.event(cycle.cycle + 1, Type::SliceEnd, slice.track, None, args, vec![], vec![])?;
-                resources.release(slice.value, slice.lane);
+                drawn.get_mut(key.object_type).unwrap().resources.release(slice.value, slice.lane);
             }
         }
-        for (id, value, flows) in begins {
-            let key = Key { object_type: object, id };
-            let title = text::value(manifest, track_field, value).to_string();
-            let (lane, track) = resources.take(&mut writer, value, &title)?;
-            slices.insert(id, Slice { value, lane, track });
+        for (key, value, flows) in begins {
+            let d = drawn.get_mut(key.object_type).unwrap();
+            let (object, id) = (key.object_type, key.id);
+            let title = text::value(manifest, d.track_field, value).to_string();
+            let (lane, track) = d.resources.take(&mut writer, value, &title)?;
+            slices.insert(key, Slice { value, lane, track });
             // The fields its create event set, but the track, and the instruction they hold.
             let mut created: Vec<(String, String)> = Vec::new();
             if let Some(create) = objects.create_event(&key) {
-                created = fields(manifest, create).into_iter().filter(|(name, _)| *name != view.tracks).collect();
-                if let (Some(d), Some(dasm)) = (&view.disassemble, dasm.as_mut()) {
-                    let bits = create.get(manifest, &d.bits).and_then(Value::unsigned);
-                    let pc = create.get(manifest, &d.pc).and_then(Value::unsigned);
+                created = fields(manifest, create).into_iter().filter(|(name, _)| *name != d.view.tracks).collect();
+                if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
+                    let bits = create.get(manifest, &dis.bits).and_then(Value::unsigned);
+                    let pc = create.get(manifest, &dis.pc).and_then(Value::unsigned);
                     if let (Some(bits), Some(pc)) = (bits, pc) {
                         created.push(("asm".to_string(), dasm.text(bits, pc).to_string()));
                     }
                 }
             }
             let known = |name: &str| created.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
-            let named: Vec<String> = labels.iter().filter_map(|&name| known(name)).collect();
+            let named: Vec<String> = d.view.label.fields().iter().filter_map(|&name| known(name)).collect();
             let mut label = if named.is_empty() { format!("{object}#{id}") } else { named.join(" ") };
             if let Some(asm) = known("asm") {
                 label = format!("{label}  {asm}");
@@ -296,4 +306,3 @@ fn convert<W: Write>(
     }
     writer.out.flush().map_err(output::error)
 }
-

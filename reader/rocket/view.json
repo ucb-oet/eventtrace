@@ -1,7 +1,18 @@
-{
-  "tracks": "stage",
-  "label": "pc",
-  "hide": ["retire"],
-  "normal_end": "retire",
-  "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv64gc"}
-}
+[
+  {
+    "object": "instruction",
+    "tracks": "stage",
+    "label": "pc",
+    "hide": ["retire"],
+    "normal_end": "retire",
+    "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv64gc"},
+    "parent": "fetch"
+  },
+  {
+    "object": "fetch",
+    "tracks": "stage",
+    "label": "pc",
+    "hide": ["use"],
+    "normal_end": "use"
+  }
+]
