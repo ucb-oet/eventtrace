@@ -61,7 +61,7 @@ class View[T <: ObjectType] private[eventtrace] (private[eventtrace] val expr: V
   def head(implicit sourceInfo: SourceInfo): T = choose(Chooser.Head, sourceInfo)
 
   /** The last member; a runtime violation if there is none. */
-  def tail(implicit sourceInfo: SourceInfo): T = choose(Chooser.Tail, sourceInfo)
+  def last(implicit sourceInfo: SourceInfo): T = choose(Chooser.Last, sourceInfo)
 
   /** Member `k`, counting from 0; a runtime violation if there are not that many. */
   def at(k: Int)(implicit sourceInfo: SourceInfo): T = {
@@ -73,9 +73,13 @@ class View[T <: ObjectType] private[eventtrace] (private[eventtrace] val expr: V
   def only(implicit sourceInfo: SourceInfo): T = choose(Chooser.Only, sourceInfo)
 
   /** Runs `body` once at elaboration with a handle standing for every member: each event on it emits one record per
-    * member, in this view's order, and nothing for an empty view. The body holds only events on the member.
+    * member, in this view's order, and nothing for an empty view. The body holds only events on the member. The loop
+    * runs in the runtime: the site's sink sends one packet, and its handler emits a record for each member it finds.
     */
-  def each(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit = EventTrace.each(expr, gen(), sourceInfo)(body)
+  def iter(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit = EventTrace.iter(expr, gen(), sourceInfo)(body)
+
+  /** The number of members, for a test in [[EventTrace.test]]: compare it with a constant, as in `view.size === 1`. */
+  def size(implicit sourceInfo: SourceInfo): Size = new Size(expr, EventTrace.location(sourceInfo))
 
   private def choose(chooser: Chooser, sourceInfo: SourceInfo): T = {
     val handle = gen()
@@ -83,6 +87,41 @@ class View[T <: ObjectType] private[eventtrace] (private[eventtrace] val expr: V
     handle
   }
 }
+
+/** A view's number of members, which only a test in [[EventTrace.test]] can use: the runtime counts the members, so
+  * the count is not known at elaboration. Comparing it with Scala's `==` would compile to a test that is always false,
+  * so it stops elaboration instead.
+  */
+final class Size private[eventtrace] (private[eventtrace] val view: ViewExpr, location: String) {
+  def ===(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Eq, k, sourceInfo)
+  def =/=(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Ne, k, sourceInfo)
+  def <(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Lt, k, sourceInfo)
+  def <=(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Le, k, sourceInfo)
+  def >(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Gt, k, sourceInfo)
+  def >=(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Ge, k, sourceInfo)
+
+  private def test(op: CompareOp, k: Int, sourceInfo: SourceInfo): Test = {
+    if (k < 0) EventTrace.elaborationError(s"compares a view's size with $k; a size is at least 0", sourceInfo)
+    new Test(view, op, k)
+  }
+
+  override def equals(that: Any): Boolean = throw new IllegalArgumentException(
+    s"a view's size is compared with Scala's ==, which runs at elaboration, when the runtime has not counted the " +
+      s"members; compare it with === inside EventTrace.test ($location)"
+  )
+  override def hashCode: Int = System.identityHashCode(this)
+}
+
+/** A comparison of a view's size with a constant, which the runtime evaluates; see [[EventTrace.test]]. */
+final class Test private[eventtrace] (
+  private[eventtrace] val view:  ViewExpr,
+  private[eventtrace] val op:    CompareOp,
+  private[eventtrace] val value: Int)
+
+/** A test gating a site, with the answer under which the site's records are kept: true inside `EventTrace.test`,
+  * false inside its `otherwise`.
+  */
+private[eventtrace] final case class Guard(test: Test, holds: Boolean)
 
 /** A field or an object's `id`, which `orderBy` can rank by. Only this library implements it. */
 trait Key {
@@ -186,7 +225,7 @@ private[eventtrace] sealed trait Chooser
 
 private[eventtrace] object Chooser {
   case object Head extends Chooser
-  case object Tail extends Chooser
+  case object Last extends Chooser
   final case class At(k: Int) extends Chooser
   case object Only extends Chooser
 }
@@ -230,8 +269,8 @@ private[eventtrace] object Binding {
   /** The member being tested by a `where` or `orderBy`, valid only inside its predicate or key. */
   final case class Member(open: Boolean) extends Binding
 
-  /** Every member of a view, valid only inside its `each` block. */
-  final case class EachMember(view: ViewExpr, open: Boolean) extends Binding
+  /** Every member of a view, valid only inside its `iter` block. */
+  final case class IterMember(view: ViewExpr, open: Boolean) extends Binding
 }
 
 private[eventtrace] object Queries {
@@ -252,7 +291,7 @@ private[eventtrace] object Queries {
       case _                   =>
     }
     def checkHandle(h: ObjectType): Unit = if (!(h eq member)) h.binding match {
-      case _: Binding.Chosen | Binding.EachMember(_, true) =>
+      case _: Binding.Chosen | Binding.IterMember(_, true) =>
       case Binding.Member(_) =>
         EventTrace.elaborationError("a where refers to the member of another query; queries cannot be nested", sourceInfo)
       case Binding.Created(_) =>
@@ -260,8 +299,8 @@ private[eventtrace] object Queries {
           "a where refers to a create block's subject, which does not exist before the clock edge",
           sourceInfo
         )
-      case Binding.EachMember(_, false) =>
-        EventTrace.elaborationError("a where refers to an each member after its each block closed", sourceInfo)
+      case Binding.IterMember(_, false) =>
+        EventTrace.elaborationError("a where refers to an iter member after its iter block closed", sourceInfo)
       case Binding.Unbound =>
         EventTrace.elaborationError("a where refers to an object that no create block or query produced", sourceInfo)
     }

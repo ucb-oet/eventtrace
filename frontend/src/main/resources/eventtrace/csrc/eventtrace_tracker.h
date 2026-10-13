@@ -293,8 +293,8 @@ T* head(Runtime& rt, unsigned site, const std::vector<T*>& v, const char* view) 
   return v.front();
 }
 template <class T>
-T* tail(Runtime& rt, unsigned site, const std::vector<T*>& v, const char* view) {
-  if (v.empty()) rt.violation(site, "tail found no members of %s", view);
+T* last(Runtime& rt, unsigned site, const std::vector<T*>& v, const char* view) {
+  if (v.empty()) rt.violation(site, "last found no members of %s", view);
   return v.back();
 }
 template <class T>

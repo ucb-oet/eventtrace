@@ -50,6 +50,6 @@ message Event {
   // The values of the event's present fields, in the order the manifest lists its fields. A UInt, Bool, or enum is
   // its value, an Id the object's ID, and an SInt its two's-complement value ZigZag-encoded, as sint64 is.
   repeated uint64 values = 3;
-  // Bit i is set when the event's field i, in the manifest's order, is absent: DontCare at this site.
+  // Bit i is set when the event's field i, in the manifest's order, is absent: left Absent at this site.
   uint64 absent = 4;
 }

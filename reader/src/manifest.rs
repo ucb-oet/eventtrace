@@ -62,7 +62,7 @@ pub struct FieldSchema {
     pub enum_name: Option<String>,
     /// An Id field's object type.
     pub object: Option<String>,
-    /// Whether some site leaves the field DontCare.
+    /// Whether some site leaves the field Absent.
     #[serde(default)]
     pub optional: bool,
 }

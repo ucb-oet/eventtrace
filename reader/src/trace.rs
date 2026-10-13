@@ -25,7 +25,7 @@ pub struct Event {
     pub event: usize,
     /// The ID of the event's subject, whose type the schema gives, if the schema gives it one.
     pub subject: Option<u64>,
-    /// Each field's value in the schema's order, or None where the site left it DontCare.
+    /// Each field's value in the schema's order, or None where the site left it Absent.
     pub values: Vec<Option<Value>>,
 }
 

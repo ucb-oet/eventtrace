@@ -26,7 +26,7 @@ class Lane extends Module {
 
 /** Stage 1 fixture: sites under when/elsewhen/otherwise inside an outer when, one unconditional site, one event in a
   * module instantiated twice, one event with enum fields, one event whose payload spans three words, and one event
-  * whose field is DontCare at one of its two sites, and events at the edges of counter bits.
+  * whose field is Absent at one of its two sites, and events at the edges of counter bits.
   */
 class Conditional extends Module {
   val io = IO(new Bundle {
@@ -86,10 +86,10 @@ class Conditional extends Module {
     }
   }
 
-  // One event at two sites. The first, elaborated earlier, leaves `cause` DontCare, so it takes its type from the
+  // One event at two sites. The first, elaborated earlier, leaves `cause` Absent, so it takes its type from the
   // second when the generated files are written, and its records leave `cause` out.
   when (count === 5.U) {
-    EventTrace.event("flush") { "cause" := DontCare }
+    EventTrace.event("flush") { "cause" := Absent }
   }
   when (count === 6.U) {
     EventTrace.event("flush") { "cause" := count(1, 0) }

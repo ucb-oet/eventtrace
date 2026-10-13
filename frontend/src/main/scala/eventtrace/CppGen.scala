@@ -102,7 +102,7 @@ private[eventtrace] object CppGen {
        |
        |namespace eventtrace {
        |
-       |// ---- What consumers see: names exactly as written. A field some site leaves DontCare is optional.
+       |// ---- What consumers see: names exactly as written. A field some site leaves Absent is optional.
        |
        |namespace generated {
        |
@@ -206,8 +206,8 @@ private[eventtrace] object CppGen {
   private def eventEncoder(e: EventSchema): String = {
     e.fields.zipWithIndex.find { case (f, i) => i >= 64 && e.optional(f.name) }.foreach { case (f, i) =>
       throw new IllegalArgumentException(
-        s"field ${f.name} of event ${e.name} is DontCare at some site, but is its field ${i + 1}; the trace marks absent " +
-          "fields in a 64-bit mask, so only the first 64 fields may be DontCare"
+        s"field ${f.name} of event ${e.name} is Absent at some site, but is its field ${i + 1}; the trace marks absent " +
+          "fields in a 64-bit mask, so only the first 64 fields may be Absent"
       )
     }
     val subject = e.subject.map(_ => "  out.subject(e.subject);").toSeq
@@ -234,7 +234,7 @@ private[eventtrace] object CppGen {
       f.source match {
         case Packed(offset) => s"  e.${f.name} = ${decode(f)};  // bits ${offset + f.width - 1}..$offset"
         case Constant(_)    => s"  e.${f.name} = ${decode(f)};  // constant, not transmitted"
-        case Absent         => s"  // ${f.name}: DontCare at this site, so absent"
+        case Omitted        => s"  // ${f.name}: Absent at this site, so left out"
         case Reference(_)   => s"  // ${f.name}: an object ID, which the handler resolves"
       }
     }
@@ -273,7 +273,7 @@ private[eventtrace] object CppGen {
     (Seq(comment, signature) ++ body.map("    " + _) ++ Seq("  }")).mkString("", "\n", "\n")
   }
 
-  /** The statements of the handler of a site with a subject or a captured ID. */
+  /** The statements of the handler of a site with a subject, a captured ID, or a test. */
   private class HandlerGen(s: SiteLayout, e: EventSchema, plan: SitePlan, stored: Map[String, ObjectTypeInfo]) {
     private val operandIndex = plan.operands.map(_._1).zipWithIndex
     private val bindings = plan.handles.map(h => h.handle.serial -> h.binding).toMap
@@ -284,7 +284,12 @@ private[eventtrace] object CppGen {
       val operands = plan.operands.zipWithIndex.map { case ((op, offset), i) =>
         s"const ${cType(op.tpe)} q$i = ${extract(op.tpe, offset)};  // compared in a query"
       }
-      val others = plan.handles.filterNot(h => subject.exists(_ eq h.handle))
+      // The tests come first, with only the handles their views need, so that a chooser they guard cannot fail and
+      // a record that fails them takes no event ID.
+      val testedHandles = closure(plan.guards.flatMap(g => Queries.handles(g.test.view)))
+      val tested = plan.handles.filter(h => testedHandles.exists(_ eq h.handle))
+      val tests = tested.map(resolve) ++ plan.guards.map(guard)
+      val others = plan.handles.filterNot(h => subject.exists(_ eq h.handle) || testedHandles.exists(_ eq h.handle))
       plan.subject.map(_.binding) match {
         case Some(Binding.Created(_)) =>
           val typeName = subject.get.typeName
@@ -296,13 +301,13 @@ private[eventtrace] object CppGen {
             // No query can find an object of a type that no collection holds, so it is not kept.
             case None => Seq(s"e.subject = rt.create(object_types::$typeName);")
           }
-          Seq(s"auto e = decodeSite${s.id}(w);") ++ operands ++ others.map(resolve) ++
+          Seq(s"auto e = decodeSite${s.id}(w);") ++ operands ++ tests ++ others.map(resolve) ++
             Seq("[[maybe_unused]] const unsigned long long event = rt.next_event_id();") ++ create ++ references ++ effects :+ print
-        case Some(Binding.EachMember(view, _)) =>
+        case Some(Binding.IterMember(view, _)) =>
           // Resolve before the loop only what the view needs; the rest may depend on the member.
           val before = closure(Queries.handles(view))
           val inside = others.filterNot(h => before.exists(_ eq h.handle))
-          Seq(s"const auto decoded = decodeSite${s.id}(w);") ++ operands ++
+          Seq(s"const auto decoded = decodeSite${s.id}(w);") ++ operands ++ tests ++
             others.filter(h => before.exists(_ eq h.handle)).map(resolve) ++
             Seq(
               s"const auto& view = ${viewCode(view)};",
@@ -310,8 +315,28 @@ private[eventtrace] object CppGen {
               "  auto e = decoded;"
             ) ++ (inside.map(resolve) ++ existing(print)).map("  " + _) :+ "}"
         case _ =>
-          Seq(s"auto e = decodeSite${s.id}(w);") ++ operands ++ plan.handles.map(resolve) ++ existing(print)
+          val rest = plan.handles.filterNot(h => testedHandles.exists(_ eq h.handle))
+          Seq(s"auto e = decodeSite${s.id}(w);") ++ operands ++ tests ++ rest.map(resolve) ++ existing(print)
       }
+    }
+
+    /** Returns from the handler, emitting nothing, unless the test gives the answer under which the site's records are
+      * kept.
+      */
+    private def guard(g: Guard): String = {
+      val t = g.test
+      val size = s"${viewCode(t.view)}.size() ${t.op.written} ${t.value}u"
+      val count = t.op match {
+        case CompareOp.Eq => "exactly"
+        case CompareOp.Ne => "other than"
+        case CompareOp.Lt => "fewer than"
+        case CompareOp.Le => "at most"
+        case CompareOp.Gt => "more than"
+        case CompareOp.Ge => "at least"
+      }
+      val text = commentText(s"${describe(t.view)} has $count ${t.value} member${if (t.value == 1) "" else "s"}")
+      if (g.holds) s"if (!($size)) return;  // kept when $text"
+      else s"if ($size) return;  // kept unless $text"
     }
 
     /** The record and effects of an event on an existing object or on none, once its handles are resolved. */
@@ -340,12 +365,12 @@ private[eventtrace] object CppGen {
     /** The value this site assigns to the subject's field `f`, from the decoded record. */
     private def value(f: ObjectField): String = if (e.optional(f.name)) s"*e.${f.name}" else s"e.${f.name}"
 
-    /** Declares a chosen handle; `each` members and new objects are declared where they arise. */
+    /** Declares a chosen handle; `iter` members and new objects are declared where they arise. */
     private def resolve(h: HandlePlan): String = h.binding match {
       case Binding.Chosen(view, chooser, _) =>
         val (helper, k) = chooser match {
           case Chooser.Head  => ("head", "")
-          case Chooser.Tail  => ("tail", "")
+          case Chooser.Last  => ("last", "")
           case Chooser.At(i) => ("at", s"$i, ")
           case Chooser.Only  => ("only", "")
         }
@@ -409,7 +434,7 @@ private[eventtrace] object CppGen {
         if (h eq member) ""
         else bindings.get(h.serial).orElse(Some(h.binding)) match {
           case Some(Binding.Chosen(_, _, at)) => s"(${h.typeName} chosen at $at)."
-          case _                              => s"(each ${h.typeName})."
+          case _                              => s"(iter ${h.typeName})."
         }
       o match {
         case Operand.Field(h, f)       => s"${of(h)}${f.name}"

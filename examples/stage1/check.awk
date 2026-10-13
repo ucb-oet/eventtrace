@@ -10,7 +10,7 @@
 #   "mode" fires when count bit 3 is set. Its enum field `mode` is count mod 4 named as a Mode variant, or Mode(3),
 #   which is not a variant; `target` is the literal Mode.Fast. The manifest must list Mode and both enum fields.
 #   "wide" fires when count bit 4 is set; its 76-bit payload spans three words.
-#   "flush" fires at count 5 without fields, its site leaving `cause` DontCare, and at count 6 with cause=2. The
+#   "flush" fires at count 5 without fields, its site leaving `cause` Absent, and at count 6 with cause=2. The
 #   manifest marks `cause` optional.
 #   "rise1" and "rise2" fire on the first cycle of each run of count bits 1 and 2 (count mod 4 = 2, count mod 8 = 4),
 #   and "fall2" on the first cycle after a run of bit 2 (count mod 8 = 0, except at count 0). Each reset clears the
@@ -133,6 +133,6 @@ END {
   if (bad) exit 1
   print "PASS: " n " records from " sites " sites over edges 0 to 52, with reset at edges 0-2 and 27-28; every site " \
     "fired exactly in its branch's cycles, the two lane instances have their own sites, enum fields print as " \
-    "variant names, a three-word payload decodes, a DontCare field is left out, edge helpers fire once per run, and " \
+    "variant names, a three-word payload decodes, an Absent field is left out, edge helpers fire once per run, and " \
     "event IDs follow (cycle, site) order through the final cycle"
 }

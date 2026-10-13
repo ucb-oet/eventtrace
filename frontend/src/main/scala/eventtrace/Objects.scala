@@ -81,7 +81,7 @@ object ObjectType {
 }
 
 /** One field of an object handle. Assigning it inside an event on the handle records the value in the event's
-  * record and, for an existing object, updates the object when the cycle ends; `DontCare` declares the field without
+  * record and, for an existing object, updates the object when the cycle ends; `Absent` declares the field without
   * a value. Inside `where`, comparing it builds a query.
   */
 sealed abstract class ObjectField(
@@ -93,7 +93,8 @@ sealed abstract class ObjectField(
 
   private[eventtrace] def operand: Operand = Operand.Field(owner, this)
 
-  def :=(value: DontCare.type)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignField(this, None, sourceInfo)
+  def :=(value: EventTrace.syntax.Absent.type)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.assignField(this, None, sourceInfo)
 
   protected def compare(op: CompareOp, that: Data)(implicit sourceInfo: SourceInfo): Pred =
     Pred.Compare(op, operand, Queries.value(tpe, that, s"${owner.typeName}.$name ${op.written}", sourceInfo))

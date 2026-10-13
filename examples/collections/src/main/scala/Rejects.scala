@@ -21,6 +21,7 @@ class Case(body: (UInt, SInt, EventTrace.Collection[Instruction]) => Unit) exten
 class Chooser(active: EventTrace.Collection[Instruction]) extends Module {
   val pc = IO(Input(UInt(8.W)))
   val chosen = active.where(_.pc === pc).only
+  val matching = active.where(_.pc === pc).size
 }
 
 /** Passes only if each design fails to elaborate with its expected error. */
@@ -31,11 +32,11 @@ object Rejects extends App {
 
   val cases = Seq[(String, () => RawModule, String)](
     ("effect on another object", design { (_, _, active) =>
-      val a = active.head; val b = active.tail
+      val a = active.head; val b = active.last
       a.event("r_other") { active.remove(b) }
     }, "remove acts on an object that is not the subject of the event \"instruction.r_other\""),
     ("field of another object", design { (_, _, active) =>
-      val a = active.head; val b = active.tail
+      val a = active.head; val b = active.last
       a.event("r_other_field") { b.stage := Stage.Decode }
     }, "instruction.stage := acts on an object that is not the subject"),
     ("effect in an event without a subject", design { (_, _, active) =>
@@ -57,17 +58,17 @@ object Rejects extends App {
       val i = active.head
       i.event("r_nested") { when (a(0)) { active.remove(i) } }
     }, "is under a `when` nested inside the event"),
-    ("nested each", design { (_, _, active) =>
-      active.each { _ => active.each { j => j.event("r_inner") {} } }
-    }, "each is nested inside another each block"),
-    ("other event in an each block", design { (a, _, active) =>
-      active.each { _ => EventTrace.event("r_aside") { "a" := a } }
-    }, "inside an each block, which may hold only events on its member"),
-    ("each member after its block", design { (_, _, active) =>
+    ("nested iter", design { (_, _, active) =>
+      active.iter { _ => active.iter { j => j.event("r_inner") {} } }
+    }, "iter is nested inside another iter block"),
+    ("other event in an iter block", design { (a, _, active) =>
+      active.iter { _ => EventTrace.event("r_aside") { "a" := a } }
+    }, "inside an iter block, which may hold only events on its member"),
+    ("iter member after its block", design { (_, _, active) =>
       var leaked: Instruction = null
-      active.each { i => leaked = i }
+      active.iter { i => leaked = i }
       leaked.event("r_leak") {}
-    }, "uses an each member after its each block closed"),
+    }, "uses an iter member after its iter block closed"),
     ("where member outside its predicate", design { (_, _, active) =>
       var leaked: Instruction = null
       active.where { i => leaked = i; i.pc === 0.U }
@@ -79,7 +80,7 @@ object Rejects extends App {
     ("create handle in a query", design { (a, _, active) =>
       Instruction.create(event = "r_young") { i =>
         i.pc := a; i.odd := a(0)
-        "older" := active.where(_.id < i.id).tail
+        "older" := active.where(_.id < i.id).last
       }
     }, "refers to a create block's subject"),
     ("nested query", design { (_, _, active) =>
@@ -104,8 +105,31 @@ object Rejects extends App {
       val a = active.head
       active.orderBy(_ => a.pc)
     }, "orderBy ranks by a field or the id of the member"),
+    ("size compared with Scala's ==", design { (_, _, active) =>
+      if (active.size == 1) active.head.event("r_eq") {}
+    }, "compare it with === inside EventTrace.test"),
+    ("negative size", design { (_, _, active) =>
+      EventTrace.test(active.size > -1) {}
+    }, "compares a view's size with -1; a size is at least 0"),
+    ("test in an event block", design { (_, _, active) =>
+      val a = active.head
+      a.event("r_test_inside") { EventTrace.test(active.size === 1) {} }
+    }, "EventTrace.test is inside an event block"),
+    ("otherwise in an event block", design { (_, _, active) =>
+      val a = active.head
+      val t = EventTrace.test(active.size === 1) {}
+      a.event("r_otherwise_inside") { t.otherwise {} }
+    }, "otherwise is inside an event block"),
+    ("test in an iter block", design { (_, _, active) =>
+      active.iter { i => EventTrace.test(active.size === 1) { i.event("r_test_iter") {} } }
+    }, "EventTrace.test is inside an iter block"),
+    ("test value from another module", design { (a, _, active) =>
+      val child = Module(new Chooser(active))
+      child.pc := a
+      EventTrace.test(child.matching === 1) { EventTrace.event("r_far_test") {} }
+    }, "uses a query comparing with a hardware value from another module"),
     ("namesakes disagreeing on destroy", design { (_, _, active) =>
-      val a = active.head; val b = active.tail
+      val a = active.head; val b = active.last
       a.event("r_end") { active.remove(a); a.destroy() }
       b.event("r_end") {}
     }, "disagree on creating or destroying their subject")

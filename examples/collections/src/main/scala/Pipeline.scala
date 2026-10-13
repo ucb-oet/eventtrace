@@ -78,7 +78,7 @@ class Pipeline extends Module {
   // Site 4: one handle feeds another query; one record squashes every younger instruction, here at most one.
   when (kill) {
     val br = active.where(_.stage === Stage.Execute).only
-    active.where(_.id > br.id).each { i =>
+    active.where(_.id > br.id).iter { i =>
       i.event("squash") { "by" := br; active.remove(i); i.destroy() }
     }
   }
@@ -91,7 +91,7 @@ class Pipeline extends Module {
   }
   // Sites 6 and 7: two events per member, even PCs before odd ones and otherwise in join order.
   when (count % 5.U === 0.U) {
-    active.orderBy(_.odd).each { i =>
+    active.orderBy(_.odd).iter { i =>
       i.event("sample") { "pass" := 0.U(1.W) }
       i.event("sample") { "pass" := 1.U(1.W) }
     }
@@ -100,6 +100,20 @@ class Pipeline extends Module {
   when (count % 4.U === 2.U && PopCount(Seq(decV, exeV, wbV)) >= 2.U) {
     active.at(1).event("second") {}
     active.orderBy(_.stage).head.event("youngest") {}
+  }
+  // Sites 10 to 12: tests on a view's size, which the runtime evaluates. The view compares with a hardware value,
+  // which travels in the payload of every site the test gates; a record whose test fails takes no event ID.
+  when (count % 3.U === 0.U) {
+    val executing = active.where(i => i.pc === exePc && i.stage === Stage.Execute)
+    EventTrace.test(executing.size === 1) {
+      val i = executing.only
+      i.event("busy") {}
+      EventTrace.test(active.size >= 3) {
+        active.iter { j => j.event("crowd") {} }
+      }
+    }.otherwise {
+      EventTrace.event("idle") { "count" := count }
+    }
   }
 }
 

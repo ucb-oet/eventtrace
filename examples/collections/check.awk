@@ -5,6 +5,7 @@
 # pipeline registers and which instruction each stage holds. Instructions join the collection when created, so join
 # order is ID order, and before each edge the collection holds exactly the instructions in writeback, execute, and
 # decode, oldest first. Within a cycle, records follow site order, and each site's records follow its view's order.
+# A record whose test fails is dropped and takes no event ID, so event IDs count only the records expected here.
 function fail(message) {
   print "FAIL: " message
   bad = 1
@@ -16,6 +17,13 @@ function emit(site, name, id, fields) {
                     k + 3, m, site, name, id, fields == "" ? "" : " " fields)
   m++
   seen[name]++
+}
+
+# One expected record of the subject-less event "idle".
+function emit_idle(site) {
+  want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d idle count=%d", k + 3, m, site, k)
+  m++
+  seen["idle"]++
 }
 
 FNR == NR {
@@ -56,6 +64,14 @@ END {
       emit(8, "second", member[1], "")
       emit(9, "youngest", member[members - 1], "")
     }
+    # Execute holds an instruction exactly when exeV, so the test on its size passes then; the nested test passes
+    # when the pipeline is full.
+    if (k % 3 == 0) {
+      if (exeV) {
+        emit(10, "busy", exeId, "")
+        if (members >= 3) for (i = 0; i < members; i++) emit(11, "crowd", member[i], "")
+      } else emit_idle(12)
+    }
 
     # The edge.
     if (enter) pc[new_id] = k
@@ -77,12 +93,13 @@ END {
         "{\"name\": \"Stage\", \"values\": {\"Decode\": 0, \"Execute\": 1, \"Writeback\": 2}}", entries, "|")
   for (i in entries)
     if (!index(manifest, entries[i])) fail("the manifest lacks " entries[i])
-  split("decode issue writeback retire squash stall sample second youngest", names, " ")
+  split("decode issue writeback retire squash stall sample second youngest busy crowd idle", names, " ")
   for (i in names)
     if (!seen[names[i]]) fail("the model never expects instruction." names[i] ", so the run does not cover it")
 
   if (bad) exit 1
   print "PASS: " n " records match the pipeline model exactly: " seen["decode"] " instructions created, " \
     seen["retire"] " retired and " seen["squash"] " squashed through queries on one collection, " seen["stall"] \
-    " stalls naming their blockers, and " seen["sample"] " samples in ranked order"
+    " stalls naming their blockers, " seen["sample"] " samples in ranked order, and tests on view sizes keeping " \
+    seen["busy"] " busy, " seen["crowd"] " crowd, and " seen["idle"] " idle records"
 }

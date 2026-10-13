@@ -38,9 +38,9 @@ object Rejects extends App {
     ("const field not initialized", design { (a, _) =>
       new Items("r_unset").create(event = "make") { p => p.tag := a(3, 0) }
     }, "does not initialize const field(s) key"),
-    ("const field left DontCare", design { (_, _) =>
-      new Items("r_dontcare").create(event = "make") { p => p.key := DontCare }
-    }, "does not initialize const field(s) key; DontCare does not count"),
+    ("const field left Absent", design { (_, _) =>
+      new Items("r_dontcare").create(event = "make") { p => p.key := Absent }
+    }, "does not initialize const field(s) key; Absent does not count"),
     ("const field assigned twice", design { (a, _) =>
       new Items("r_const2").create(event = "make") { p => p.key := a(3, 0); p.key := a(7, 4) }
     }, "r_const2.key := assigns the field a second time in one block"),
@@ -80,10 +80,10 @@ object Rejects extends App {
       new Shapes(false).create(event = "make") { p => p.size := a(3, 0) }
       new Shapes(true).create(event = "make") { p => p.size := a(3, 0); p.extra.get := a(7, 4) }
     }, "all instances of an object type must declare the same fields"),
-    ("event field DontCare at every site", design { (a, _) =>
-      when (a(0)) { EventTrace.event("r_absent") { "cause" := DontCare } }
-      .otherwise  { EventTrace.event("r_absent") { "cause" := DontCare } }
-    }, "field \"cause\" of event \"r_absent\" is DontCare at every site")
+    ("event field Absent at every site", design { (a, _) =>
+      when (a(0)) { EventTrace.event("r_absent") { "cause" := Absent } }
+      .otherwise  { EventTrace.event("r_absent") { "cause" := Absent } }
+    }, "field \"cause\" of event \"r_absent\" is Absent at every site")
   )
 
   val failures = cases.filterNot { case (label, gen, expected) =>

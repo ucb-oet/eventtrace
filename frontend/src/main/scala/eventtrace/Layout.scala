@@ -34,13 +34,13 @@ private[eventtrace] case class Packed(offset: Int) extends FieldSource
 /** Captured from a literal, so never transmitted; the decoder supplies it. */
 private[eventtrace] case class Constant(value: BigInt) extends FieldSource
 
-/** Left `DontCare` at this site, so absent from its records. */
-private[eventtrace] case object Absent extends FieldSource
+/** Left `Absent` at this site, so left out of its records. */
+private[eventtrace] case object Omitted extends FieldSource
 
 /** The ID of the object `handle` resolves to, which the runtime supplies. */
 private[eventtrace] case class Reference(handle: ObjectType) extends FieldSource
 
-/** One field of a site. An event-local field left `DontCare` has no type until [[EventSchema.resolve]] takes it from
+/** One field of a site. An event-local field left `Absent` has no type until [[EventSchema.resolve]] takes it from
   * a site sharing its event name.
   */
 private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType], source: FieldSource) {
@@ -51,7 +51,7 @@ private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType],
   def enumDef: Option[EnumDef] = resolved.enumDef
   def idOf: Option[String] = resolved.idOf
   def kind: String = resolved.kind
-  def typeName: String = tpe.map(_.typeName).getOrElse("DontCare")
+  def typeName: String = tpe.map(_.typeName).getOrElse("Absent")
 }
 
 /** One emission site, as recorded at elaboration, in the module instance that declared it. Its sink carries
@@ -60,7 +60,7 @@ private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType],
   * @param written   the event name as written at the site, such as `arrive`
   * @param subject   the subject's object type, such as `packet`, for an event with a subject
   * @param lifecycle `create` for a create event, `destroy` for one that destroys its subject
-  * @param plan      how the runtime handles the site's records, for an event with a subject or a captured ID
+  * @param plan      how the runtime handles the site's records, for an event with a subject, a captured ID, or a test
   */
 private[eventtrace] case class SiteLayout(
   id:           Int,
@@ -82,7 +82,8 @@ private[eventtrace] case class SiteLayout(
   def instance: String = module.pathName
 }
 
-/** What a site's handler does besides decoding its fields: resolve handles, then apply effects to the subject.
+/** What a site's handler does besides decoding its fields: test the views that gate it, resolve handles, then apply
+  * effects to the subject.
   *
   * @param subject  the subject, if any: a create block's new object, a chosen object, or each member of a view
   * @param handles  every handle the site resolves, the subject among them, in construction order, so that each
@@ -90,13 +91,15 @@ private[eventtrace] case class SiteLayout(
   * @param operands the hardware values its queries compare with, and the bit where each starts in the payload
   * @param assigned the subject's fields this site assigns a value, which are also record fields
   * @param effects  membership changes and destruction, in the order written
+  * @param guards   the tests the site's records must pass, outermost first
   */
 private[eventtrace] case class SitePlan(
   subject:  Option[HandlePlan],
   handles:  Seq[HandlePlan],
   operands: Seq[(Operand.Hardware, Int)],
   assigned: Seq[ObjectField],
-  effects:  Seq[Effect])
+  effects:  Seq[Effect],
+  guards:   Seq[Guard])
 
 /** One handle a site resolves, as bound when the site was elaborated. */
 private[eventtrace] case class HandlePlan(handle: ObjectType, binding: Binding) {
@@ -108,7 +111,7 @@ private[eventtrace] object SiteLayout {
 }
 
 /** The format consumers see for one event name, whichever site emitted it: its fields, sorted by name, and which of
-  * them some site leaves `DontCare`.
+  * them some site leaves `Absent`.
   */
 private[eventtrace] case class EventSchema(
   name:      String,
@@ -121,7 +124,7 @@ private[eventtrace] case class EventSchema(
 
 private[eventtrace] object EventSchema {
 
-  /** Gives each event-local field left `DontCare` the type its namesake sites declare. Sites sharing a name were
+  /** Gives each event-local field left `Absent` the type its namesake sites declare. Sites sharing a name were
     * checked at elaboration to agree on every type they declare, but a site that elaborated earlier may lack one.
     *
     * @return the sites with every field typed, or the fields that no site gives a type, with their sites' locations
@@ -132,7 +135,7 @@ private[eventtrace] object EventSchema {
     }
     val untyped = sites.groupBy(_.name).toSeq.sortBy(_._1).flatMap { case (name, group) =>
       group.flatMap(_.fields.map(_.name)).distinct.filterNot(types(name).contains).map { field =>
-        s"""field "$field" of event "$name" is DontCare at every site (${group.map(_.location).mkString(", ")}), so it has no type"""
+        s"""field "$field" of event "$name" is Absent at every site (${group.map(_.location).mkString(", ")}), so it has no type"""
       }
     }
     if (untyped.nonEmpty) Left(untyped)
@@ -143,7 +146,7 @@ private[eventtrace] object EventSchema {
   def fromSites(sites: Seq[SiteLayout]): Seq[EventSchema] =
     sites.groupBy(_.name).toSeq.sortBy(_._1).map { case (name, group) =>
       val first = group.minBy(_.id)
-      val optional = group.flatMap(_.fields).collect { case FieldLayout(field, _, Absent) => field }.toSet
+      val optional = group.flatMap(_.fields).collect { case FieldLayout(field, _, Omitted) => field }.toSet
       EventSchema(name, first.written, first.subject, first.lifecycle, first.fields.sortBy(_.name), optional, group.sortBy(_.id))
     }
 }

@@ -24,6 +24,9 @@ import scala.util.DynamicVariable
   *   i.event("retire") { active.remove(i); i.destroy() }
   * }
   * }}}
+  *
+  * Scala decides which sites exist, Chisel when a site fires and what it captures, and the runtime, through queries,
+  * `iter`, and [[test]], which objects an event acts on and whether a record is kept.
   */
 object EventTrace {
   type ObjectType = eventtrace.ObjectType
@@ -48,14 +51,14 @@ object EventTrace {
   /** Known at elaboration, so supplied by the decoder. */
   private case class Literal(value: BigInt) extends Value
 
-  /** Left `DontCare`. */
+  /** Left `Absent`. */
   private case object Unset extends Value
 
   /** The ID of the object `handle` resolves to, supplied by the runtime. */
   private case class Ref(handle: ObjectType) extends Value
 
   /** One field written in the open event: an event-local capture, or an assignment to the subject's `field`. An
-    * event-local `DontCare` has no type until generation.
+    * event-local `Absent` has no type until generation.
     */
   private case class Entry(name: String, value: Value, tpe: Option[FieldType], field: Option[ObjectField]) {
     def objectField: Boolean = field.isDefined
@@ -73,8 +76,11 @@ object EventTrace {
 
   private val openEvent = new DynamicVariable[Option[OpenEvent]](None)
 
-  /** The member handle of the `each` block whose body is running. */
-  private val openEach = new DynamicVariable[Option[ObjectType]](None)
+  /** The member handle of the `iter` block whose body is running. */
+  private val openIter = new DynamicVariable[Option[ObjectType]](None)
+
+  /** The tests gating the sites declared now, outermost first. */
+  private val openGuards = new DynamicVariable[Seq[Guard]](Seq.empty)
 
   /** Set while an event reads its enable from `when.cond`, which evaluates every enclosing condition again. */
   private[eventtrace] val computingEnable = new DynamicVariable(false)
@@ -175,14 +181,49 @@ object EventTrace {
     site(what, event, Some(handle), created = false, sourceInfo)(body)
   }
 
-  /** Runs an `each` block with `member` standing for every member of `view`; see [[View.each]]. */
-  private[eventtrace] def each[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit = if (tracing) {
-    if (openEach.value.isDefined) elaborationError("each is nested inside another each block, which is not supported", sourceInfo)
+  /** Runs an `iter` block with `member` standing for every member of `view`; see [[View.iter]]. */
+  private[eventtrace] def iter[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit = if (tracing) {
+    if (openIter.value.isDefined) elaborationError("iter is nested inside another iter block, which is not supported", sourceInfo)
     if (openEvent.value.isDefined)
-      elaborationError("each is inside an event block; put the events inside the each block instead", sourceInfo)
-    member.binding = Binding.EachMember(view, open = true)
-    try openEach.withValue(Some(member))(body(member))
-    finally member.binding = Binding.EachMember(view, open = false)
+      elaborationError("iter is inside an event block; put the events inside the iter block instead", sourceInfo)
+    member.binding = Binding.IterMember(view, open = true)
+    try openIter.withValue(Some(member))(body(member))
+    finally member.binding = Binding.IterMember(view, open = false)
+  }
+
+  /** Gates the sites declared in `body` on a test of a view's size, which the runtime evaluates against the state
+    * before the clock edge: a site's records are kept only when its tests hold. Hardware never sees a test, so a sink
+    * still sends a packet whenever its Chisel conditions hold, and the runtime drops the packet when a test fails;
+    * the Chisel conditions therefore set the bandwidth.
+    *
+    * {{{
+    * when (take_pc_wb) {
+    *   val writeback = active.where(_.stage === Stage.Writeback)
+    *   EventTrace.test(writeback.size === 1) {
+    *     val by = writeback.only
+    *     younger.iter { i => i.event("flush") { "by" := by; active.remove(i); i.destroy() } }
+    *   }.otherwise {
+    *     younger.iter { i => i.event("flush") { "by" := Absent; active.remove(i); i.destroy() } }
+    *   }
+    * }
+    * }}}
+    *
+    * Like an event block, the block runs once at elaboration and declares sites. It may hold queries, events, `iter`
+    * blocks, nested tests, and Chisel `when`s around events. A Chisel connection in it would not be gated by the test,
+    * so it does not belong there.
+    */
+  def test(t: Test)(body: => Unit)(implicit sourceInfo: SourceInfo): TestContext = {
+    guarded(Guard(t, holds = true), "EventTrace.test", sourceInfo)(body)
+    new TestContext(t)
+  }
+
+  /** Runs `body` with `guard` gating the sites it declares. */
+  private[eventtrace] def guarded(guard: Guard, what: String, sourceInfo: SourceInfo)(body: => Unit): Unit = if (tracing) {
+    if (openEvent.value.isDefined)
+      elaborationError(s"$what is inside an event block; put the event inside the test instead", sourceInfo)
+    if (openIter.value.isDefined)
+      elaborationError(s"$what is inside an iter block; put the iter block inside the test instead", sourceInfo)
+    openGuards.withValue(openGuards.value :+ guard)(body)
   }
 
   /** Captures a named event-local value; equivalent to `name := value`. */
@@ -204,9 +245,9 @@ object EventTrace {
   def capture(name: String, handle: ObjectType)(implicit sourceInfo: SourceInfo): Unit = capture(name, handle.id)
 
   /** Declares a field this site has no value for, so that it matches the sites sharing its event name. The field
-    * takes the type those sites declare, and is absent from this site's records.
+    * takes the type those sites declare, and is left out of this site's records.
     */
-  def capture(name: String, value: DontCare.type)(implicit sourceInfo: SourceInfo): Unit =
+  def capture(name: String, value: syntax.Absent.type)(implicit sourceInfo: SourceInfo): Unit =
     addCapture(name, sourceInfo)(_ => Entry(name, Unset, None, None))
 
   /** The manifest of the most recent elaboration, as JSON: what consumers see, for tools outside the simulator.
@@ -214,7 +255,7 @@ object EventTrace {
     * It describes the design rather than being compiled into the simulator, so each flow writes it with its other
     * descriptions of the design once elaboration has finished. Chipyard registers it with rocket-chip's
     * `ElaborationArtefacts`, which builds each file after elaboration and writes it next to the `.dts`; other flows
-    * write it after elaborating. Sites' instance paths, and the types of event-local fields left `DontCare` at some
+    * write it after elaborating. Sites' instance paths, and the types of event-local fields left `Absent` at some
     * sites, are only known once elaboration has finished.
     */
   def manifest: String = {
@@ -222,7 +263,7 @@ object EventTrace {
     ManifestGen.json(EventSchema.fromSites(sites), sites)
   }
 
-  /** Every site of an elaboration, each event-local field left `DontCare` taking its type from the other sites. */
+  /** Every site of an elaboration, each event-local field left `Absent` taking its type from the other sites. */
   private def resolvedSites(d: Declarations): Seq[SiteLayout] =
     EventSchema.resolve(d.siteLayouts.toSeq) match {
       case Right(typed)   => typed
@@ -255,8 +296,14 @@ object EventTrace {
       def :=[T <: EnumType](value: T)(implicit ev: EnumOf[T], sourceInfo: SourceInfo): Unit = capture(name, value)
       def :=(value: IdRef)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
       def :=(value: ObjectType)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
-      def :=(value: DontCare.type)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
+      def :=(value: Absent.type)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
     }
+
+    /** A field this site has no value for, as in `"cause" := Absent` or `inst.cause := Absent`: sites sharing an event
+      * name declare the same fields, and the field is left out of this site's records. EventTrace's own word, since
+      * Chisel's `DontCare` means the opposite, some value the compiler may choose.
+      */
+    case object Absent
   }
 
   /** One emission site: runs `body` as the open event, then lays out its payload and instantiates its sink. */
@@ -264,10 +311,11 @@ object EventTrace {
     body: => Unit
   ): Unit = {
     if (openEvent.value.isDefined) elaborationError(s"$what is nested inside another event", sourceInfo)
-    openEach.value.foreach { member =>
+    openIter.value.foreach { member =>
       if (!subject.exists(_ eq member))
-        elaborationError(s"$what is inside an each block, which may hold only events on its member", sourceInfo)
+        elaborationError(s"$what is inside an iter block, which may hold only events on its member", sourceInfo)
     }
+    val guards = openGuards.value
     val name = SiteLayout.qualifiedName(subject.map(_.typeName), written)
 
     // The library call does not inherit the `when` the way a printf does; capture it explicitly. `when.cond`
@@ -286,15 +334,18 @@ object EventTrace {
       }
       if (missing.nonEmpty)
         elaborationError(
-          s"$what does not initialize const field(s) ${missing.mkString(", ")}; DontCare does not count",
+          s"$what does not initialize const field(s) ${missing.mkString(", ")}; Absent does not count",
           sourceInfo
         )
     }
 
     // Transmitted fields are laid out in declaration order, starting at the least significant bit, followed by the
-    // hardware values the site's queries compare with.
+    // hardware values the site's queries and tests compare with.
     val refs = entries.collect { case Entry(_, Ref(handle), _, _) => handle }
-    val resolved = Option.when(subject.isDefined || refs.nonEmpty)(handles(what, open, subject.toSeq ++ refs, sourceInfo))
+    val tested = guards.map(_.test.view)
+    val resolved = Option.when(subject.isDefined || refs.nonEmpty || guards.nonEmpty)(
+      handles(what, open, subject.toSeq ++ refs ++ tested.flatMap(Queries.handles), tested, sourceInfo)
+    )
     val queryValues = resolved.toSeq.flatMap(_._2)
     val packed = entries.collect { case Entry(field, Hardware(value), Some(t), _) => (field, value, t.width) }
     val offsets = packed.map(_._1).zip(packed.scanLeft(0)(_ + _._3)).toMap
@@ -305,7 +356,7 @@ object EventTrace {
       val source = e.value match {
         case Hardware(_)    => Packed(offsets(e.name))
         case Literal(value) => Constant(value)
-        case Unset          => Absent
+        case Unset          => Omitted
         case Ref(handle)    => Reference(handle)
       }
       FieldLayout(e.name, e.tpe, source)
@@ -318,7 +369,8 @@ object EventTrace {
         handlePlans,
         operandOffsets,
         entries.toSeq.collect { case Entry(_, value, _, Some(field)) if value != Unset => field },
-        open.effects.toSeq
+        open.effects.toSeq,
+        guards
       )
     }
     val siteId = siteLayouts.length
@@ -340,17 +392,19 @@ object EventTrace {
       f.source match {
         case Packed(offset)  => s"${f.name}@$offset:${f.width}"
         case Constant(value) => s"${f.name}=$value"
-        case Absent          => s"${f.name}=DontCare"
+        case Omitted         => s"${f.name}=Absent"
         case Reference(_)    => s"${f.name}=id"
       }
     } ++ operandOffsets.map { case (op, offset) => s"query@$offset:${op.tpe.width}" }
-    println(s"""[eventtrace] site $siteId "$name" at ${location(sourceInfo)}: [${summary.mkString(", ")}] in $payloadWords payload words""")
+    val gated = if (guards.isEmpty) "" else s", gated by ${guards.length} test${if (guards.length > 1) "s" else ""}"
+    println(s"""[eventtrace] site $siteId "$name" at ${location(sourceInfo)}: [${summary.mkString(", ")}] in $payloadWords payload words$gated""")
   }
 
-  /** Every handle a site resolves, starting from its subject and the handles whose IDs it captures and following
-    * the queries they come from, in construction order; and the hardware values those queries compare with.
+  /** Every handle a site resolves, starting from its subject, the handles whose IDs it captures, and the handles its
+    * tests' views refer to, and following the queries they come from, in construction order; and the hardware values
+    * those queries and the tested views compare with.
     */
-  private def handles(what: String, open: OpenEvent, roots: Seq[ObjectType], sourceInfo: SourceInfo)
+  private def handles(what: String, open: OpenEvent, roots: Seq[ObjectType], tested: Seq[ViewExpr], sourceInfo: SourceInfo)
     : (Seq[HandlePlan], Seq[Operand.Hardware]) = {
     val seen = mutable.LinkedHashMap.empty[Long, ObjectType]
     def visit(handle: ObjectType): Unit = if (!seen.contains(handle.serial)) {
@@ -361,7 +415,7 @@ object EventTrace {
     roots.foreach(visit)
     val ordered = seen.values.toSeq.sortBy(_.serial)
     val values = mutable.ArrayBuffer.empty[Operand.Hardware]
-    ordered.flatMap(viewOf).flatMap(Queries.hardware).foreach { v => if (!values.exists(_ eq v)) values += v }
+    (ordered.flatMap(viewOf) ++ tested).flatMap(Queries.hardware).foreach { v => if (!values.exists(_ eq v)) values += v }
     values.foreach { v =>
       if (!(v.module eq open.module))
         elaborationError(
@@ -375,18 +429,18 @@ object EventTrace {
 
   private def viewOf(handle: ObjectType): Option[ViewExpr] = handle.binding match {
     case Binding.Chosen(view, _, _)   => Some(view)
-    case Binding.EachMember(view, _) => Some(view)
+    case Binding.IterMember(view, _) => Some(view)
     case _                            => None
   }
 
-  /** A handle may be used where its object can be resolved: inside its create or `each` block, or anywhere if a
+  /** A handle may be used where its object can be resolved: inside its create or `iter` block, or anywhere if a
     * chooser produced it.
     */
   private def checkHandle(what: String, handle: ObjectType, sourceInfo: SourceInfo): Unit = handle.binding match {
-    case Binding.Chosen(_, _, _) | Binding.Created(true) | Binding.EachMember(_, true) =>
+    case Binding.Chosen(_, _, _) | Binding.Created(true) | Binding.IterMember(_, true) =>
     case Binding.Created(false) => elaborationError(s"$what uses a handle after its create block closed", sourceInfo)
-    case Binding.EachMember(_, false) =>
-      elaborationError(s"$what uses an each member after its each block closed", sourceInfo)
+    case Binding.IterMember(_, false) =>
+      elaborationError(s"$what uses an iter member after its iter block closed", sourceInfo)
     case Binding.Member(_) =>
       elaborationError(s"$what uses the member of a where or orderBy outside its predicate", sourceInfo)
     case Binding.Unbound =>
@@ -416,7 +470,7 @@ object EventTrace {
     Entry(name, v.litOption.map(Literal).getOrElse(Hardware(v)), Some(tpe), None)
   }
 
-  /** Records an assignment to a field of the open event's subject; `None` is `DontCare`. */
+  /** Records an assignment to a field of the open event's subject; `None` is `Absent`. */
   private[eventtrace] def assignField(field: ObjectField, value: Option[Data], sourceInfo: SourceInfo): Unit = {
     val what = s"${field.owner.typeName}.${field.name} :="
     checkHandle(what, field.owner, sourceInfo)
@@ -605,7 +659,7 @@ object EventTrace {
   }
 
   /** Sites sharing a name are one event to consumers. They must declare the same fields, in any order, with the
-    * same types where both declare one, since an event-local `DontCare` has none; and agree on creating and on
+    * same types where both declare one, since an event-local `Absent` has none; and agree on creating and on
     * destroying the subject.
     */
   private def checkNamesakes(
@@ -641,6 +695,14 @@ object EventTrace {
 
   private[eventtrace] def elaborationError(message: String, sourceInfo: SourceInfo): Nothing =
     throw new IllegalArgumentException(s"$message (${location(sourceInfo)})")
+}
+
+/** What [[EventTrace.test]] returns, for its `otherwise`. */
+final class TestContext private[eventtrace] (t: Test) {
+
+  /** Gates the sites declared in `body` on the opposite answer: their records are kept only when the test fails. */
+  def otherwise(body: => Unit)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.guarded(Guard(t, holds = false), "otherwise", sourceInfo)(body)
 }
 
 /** An object type's declaration as first used: its fields, in declaration order, and their signature. */

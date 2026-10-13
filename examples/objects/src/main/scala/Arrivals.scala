@@ -34,7 +34,7 @@ class Arrivals extends Module {
     Packet.create(event = "arrive") { p => p.seq := count; p.kind := count(3, 2); "lane" := 0.U(1.W) }
   }
   when (count(2, 0) === 0.U) {   // site 1: every 8th cycle; it has no kind, so its records leave kind out
-    Packet.create(event = "arrive") { p => p.seq := count; p.kind := DontCare; "lane" := 1.U(1.W) }
+    Packet.create(event = "arrive") { p => p.seq := count; p.kind := Absent; "lane" := 1.U(1.W) }
   }
   when (count % 3.U === 0.U) {   // site 2: every 3rd cycle
     Token.create(event = "grant") { t => t.slot := count(3, 0) }

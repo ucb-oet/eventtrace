@@ -4,7 +4,7 @@
 # Records come from edges 3 to 51, where the counter is the edge minus 3, from 0 to 48. Within a cycle the runtime
 # handles sites in order: site 0 creates a packet when count mod 4 is 0, site 1 another when count mod 8 is 0, and
 # site 2 a token when count mod 3 is 0. Event IDs count every record from 0; packets and tokens each count from 0.
-# Site 1 leaves kind DontCare, so its records have no kind; lane is a literal at both packet sites.
+# Site 1 leaves kind Absent, so its records have no kind; lane is a literal at both packet sites.
 function fail(message) {
   print "FAIL: " message
   bad = 1
@@ -51,5 +51,5 @@ END {
 
   if (bad) exit 1
   print "PASS: " n " records match exactly: " packets " packets and " tokens " tokens numbered per type in site " \
-    "order, one event counter, kind absent where DontCare, and the last cycle flushed"
+    "order, one event counter, kind left out where Absent, and the last cycle flushed"
 }
