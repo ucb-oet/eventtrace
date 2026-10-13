@@ -4,14 +4,15 @@
 //! The view, as `view.rs` describes it, gives the field whose values are the tracks and how to label slices. Every
 //! field an object's create event sets, but the track, becomes an argument of its slices. The object's events that
 //! neither create it nor carry the track field, less those the view hides, are marked at their cycle on the subject's
-//! track; an Id field of a marked event naming another object of the type draws an arrow from a mark on that object's
-//! track, such as "stall of instruction#13" on its blocker's.
+//! track. An Id field naming another object of the type, in any event the view does not hide, draws an arrow from a
+//! mark on that object's track, such as "stall of instruction#13" on its blocker's, to the event's mark, or, for an
+//! event not marked, to the slice it begins.
 //!
 //! An object set to a value at cycle c holds it from cycle c+1, and leaves it at the cycle after the event that moves
 //! or destroys it. Time is one nanosecond per cycle, so Perfetto's time axis reads in cycles. Objects that hold one
 //! value at the same time get lanes: a track gains a sibling while they overlap.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -169,15 +170,24 @@ fn convert<W: Write>(
             return Err(Error(format!("the view hides {hidden}, which is not an event of {object}")));
         }
     }
-    // The events marked as instants, with the Id fields of each that draw arrows.
-    let marks: HashMap<usize, Vec<&str>> = manifest
+    // The object's events that the view does not hide.
+    let shown: Vec<(usize, &EventSchema)> = manifest
         .events
         .iter()
         .enumerate()
         .filter(|(_, e)| of_object(e))
-        .filter(|(_, e)| e.lifecycle != Some(Lifecycle::Create) && !e.fields.iter().any(|f| f.name == view.tracks))
         .filter(|(_, e)| !view.hide.iter().any(|h| h == e.short_name()))
-        .map(|(i, e)| {
+        .collect();
+    // The events marked as instants.
+    let marked: HashSet<usize> = shown
+        .iter()
+        .filter(|(_, e)| e.lifecycle != Some(Lifecycle::Create) && !e.fields.iter().any(|f| f.name == view.tracks))
+        .map(|&(i, _)| i)
+        .collect();
+    // The Id fields of each event that draw arrows.
+    let arrows: HashMap<usize, Vec<&str>> = shown
+        .iter()
+        .map(|&(i, e)| {
             let ids = e.fields.iter().filter(|f| f.ty == FieldType::Id && f.object.as_deref() == Some(object));
             (i, ids.map(|f| f.name.as_str()).collect())
         })
@@ -206,35 +216,41 @@ fn convert<W: Write>(
         last = cycle.cycle;
         // Every event of a cycle sees the state before its clock edge; their changes start at the next cycle.
         let mut ends: Vec<(u64, Option<&str>)> = Vec::new();
-        let mut begins: Vec<(u64, Value)> = Vec::new();
+        let mut begins: Vec<(u64, Value, Vec<u64>)> = Vec::new();
         for e in &cycle.events {
             let Some(key) = Key::subject(manifest, e) else { continue };
             if key.object_type != object {
                 continue;
             }
             let schema = &manifest.events[e.event];
-            if let (Some(ids), Some(slice)) = (marks.get(&e.event), slices.get(&key.id)) {
-                let track = slice.track;
-                let mut terminating = Vec::new();
-                for id in ids {
+            let destroys = schema.lifecycle == Some(Lifecycle::Destroy);
+            let value = if destroys { None } else { e.get(manifest, &view.tracks) };
+            // The event's arrows end at its mark, on the subject's track, or at the slice it begins.
+            let mark = slices.get(&key.id).filter(|_| marked.contains(&e.event)).map(|slice| slice.track);
+            let mut flows = Vec::new();
+            if mark.is_some() || value.is_some() {
+                for id in arrows.get(&e.event).into_iter().flatten() {
                     let Some(other) = e.get(manifest, id).and_then(Value::unsigned) else { continue };
                     if let Some(other) = slices.get(&other) {
                         let name = format!("{} of {object}#{}", schema.short_name(), key.id);
                         writer.event(cycle.cycle, Type::Instant, other.track, Some(name), vec![], vec![next_flow], vec![])?;
-                        terminating.push(next_flow);
+                        flows.push(next_flow);
                         next_flow += 1;
                     }
                 }
-                let args = fields(manifest, e);
-                writer.event(cycle.cycle, Type::Instant, track, Some(schema.short_name().to_string()), args, vec![], terminating)?;
             }
-            if schema.lifecycle == Some(Lifecycle::Destroy) {
+            if let Some(track) = mark {
+                let args = fields(manifest, e);
+                let flows = std::mem::take(&mut flows);
+                writer.event(cycle.cycle, Type::Instant, track, Some(schema.short_name().to_string()), args, vec![], flows)?;
+            }
+            if destroys {
                 ends.push((key.id, Some(schema.short_name())));
-            } else if let Some(value) = e.get(manifest, &view.tracks) {
+            } else if let Some(value) = value {
                 if slices.contains_key(&key.id) {
                     ends.push((key.id, None));
                 }
-                begins.push((key.id, value));
+                begins.push((key.id, value, flows));
             }
         }
         objects.commit(&cycle);
@@ -245,7 +261,7 @@ fn convert<W: Write>(
                 resources.release(slice.value, slice.lane);
             }
         }
-        for (id, value) in begins {
+        for (id, value, flows) in begins {
             let key = Key { object_type: object, id };
             let title = text::value(manifest, track_field, value).to_string();
             let (lane, track) = resources.take(&mut writer, value, &title)?;
@@ -270,7 +286,7 @@ fn convert<W: Write>(
             }
             let mut args = vec![("object".to_string(), format!("{object}#{id}"))];
             args.extend(created);
-            writer.event(cycle.cycle + 1, Type::SliceBegin, track, Some(label), args, vec![], vec![])?;
+            writer.event(cycle.cycle + 1, Type::SliceBegin, track, Some(label), args, vec![], flows)?;
         }
     }
     // Objects still live when the trace ends keep their last slice open to its end.

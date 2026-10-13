@@ -7,7 +7,7 @@
 //! - tracks: the field whose value is the object's stage, or in Perfetto its track. An enum field's stages follow its
 //!   variants' order.
 //! - label, optional: the field, or list of fields, labelling each object; by default, in Perfetto, its ID.
-//! - hide, optional: in Perfetto, events of the object not to mark.
+//! - hide, optional: in Perfetto, events of the object neither marked nor drawing arrows.
 //! - normal_end, optional: in a waterfall, the event that ends an object normally, such as retire; objects ended by
 //!   any other event left without it. Without it, every end is normal.
 //! - disassemble, optional: the fields holding a RISC-V instruction and its PC, and the core's ISA string, of which
