@@ -1,5 +1,13 @@
 [
   {
+    "object": "fetch",
+    "tracks": "stage",
+    "label": "pc",
+    "hide": ["use"],
+    "normal_end": "use",
+    "created_in": {"lookup": "S1"}
+  },
+  {
     "object": "instruction",
     "tracks": "stage",
     "label": "pc",
@@ -8,13 +16,5 @@
     "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv64gc"},
     "parent": "fetch",
     "created_in": {"decode": "Decode"}
-  },
-  {
-    "object": "fetch",
-    "tracks": "stage",
-    "label": "pc",
-    "hide": ["use"],
-    "normal_end": "use",
-    "created_in": {"lookup": "S1"}
   }
 ]
