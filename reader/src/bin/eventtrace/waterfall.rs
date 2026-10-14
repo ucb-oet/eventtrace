@@ -80,8 +80,6 @@ struct Drawn<'a> {
     view: &'a View,
     /// Its index in the file's types.
     index: u32,
-    /// The fields of its events, by name.
-    field_types: HashMap<&'a str, &'a FieldSchema>,
     stage_of: HashMap<Value, u32>,
     /// The object's const fields, if the manifest lists its type.
     consts: Option<Vec<&'a str>>,
@@ -91,12 +89,12 @@ struct Drawn<'a> {
 }
 
 /// What a row needs besides its message: whether its create event is in the trace, the order of that event among the
-/// file's, its parent, and its fields so far, for its label.
+/// file's, its parent, and its fields so far, each with the schema of the event that set it, for its label.
 #[derive(Default)]
 struct Origin<'a> {
     created: Option<usize>,
     parent: Option<Key<'a>>,
-    known: HashMap<&'a str, Value>,
+    known: HashMap<&'a str, (&'a FieldSchema, Value)>,
 }
 
 fn convert<W: Write>(
@@ -130,14 +128,11 @@ fn convert<W: Write>(
     for (index, view) in views.iter().enumerate() {
         let object = view.object.as_str();
         let track = view.tracks.as_str();
-        let mut field_types: HashMap<&str, &FieldSchema> = HashMap::new();
-        for event in manifest.events.iter().filter(|e| e.subject.as_deref() == Some(object)) {
-            for field in &event.fields {
-                field_types.insert(&field.name, field);
-            }
-        }
-        let track_type = *field_types
-            .get(track)
+        let track_type = manifest
+            .events
+            .iter()
+            .filter(|e| e.subject.as_deref() == Some(object))
+            .find_map(|e| e.fields.iter().find(|f| f.name == track))
             .ok_or_else(|| Error(format!("no event of {object} sets a field named {track}")))?;
         // Stages: an enum's variants in their order; otherwise the values seen, in numeric order.
         let stage_values: Vec<Value> = match (track_type.ty, &track_type.enum_name) {
@@ -172,12 +167,11 @@ fn convert<W: Write>(
             let consts = o.fields.iter().filter(|f| f.property == Some(Property::Const));
             consts.map(|f| f.name.as_str()).collect()
         });
-        drawn.insert(object, Drawn { view, index: index as u32, field_types, stage_of, consts, created_in, dasm });
+        drawn.insert(object, Drawn { view, index: index as u32, stage_of, consts, created_in, dasm });
     }
-    let text_of = |d: &Drawn, name: &str, value: Value| text::value(manifest, d.field_types[name], value).to_string();
-    let present = |e: &Event| -> Vec<(&str, Value)> {
-        e.present_fields(manifest).map(|(f, v)| (f.name.as_str(), v)).collect()
-    };
+    // Each field is written as its own event declares it: two events of one type may each have a field of one name,
+    // such as `trap`'s UInt `cause` and `mark_replay`'s enum `cause`.
+    let text_of = |field: &FieldSchema, value: Value| text::value(manifest, field, value).to_string();
 
     let mut rows: IndexMap<Key, pb::Row> = IndexMap::new();
     let mut origins: HashMap<Key, Origin> = HashMap::new();
@@ -215,31 +209,30 @@ fn convert<W: Write>(
         } else {
             event.effect = Some(Effect::Observes(true));
         }
-        let fields = present(e);
-        for &(name, value) in &fields {
-            if name == track && lifecycle != Some(Lifecycle::Destroy) {
+        let fields: Vec<(&FieldSchema, Value)> = e.present_fields(manifest).collect();
+        for &(field, value) in &fields {
+            if field.name == track && lifecycle != Some(Lifecycle::Destroy) {
                 continue;
             }
-            let name_text = texts.get(name);
-            let value_text = texts.get(&text_of(d, name, value));
+            let name_text = texts.get(&field.name);
+            let value_text = texts.get(&text_of(field, value));
             event.fields.push(pb::Field { name: name_text, text: value_text, row: None });
-            let field = d.field_types[name];
             if let (FieldType::Id, Some(object_type), Some(id)) = (field.ty, &field.object, value.unsigned()) {
                 refs.push((key, row.events.len(), event.fields.len() - 1, Key { object_type, id }));
             }
         }
-        origin.known.extend(fields.iter().copied());
+        origin.known.extend(fields.iter().map(|&(field, value)| (field.name.as_str(), (field, value))));
         if lifecycle == Some(Lifecycle::Create) {
             origin.created = Some(order);
             if let Some(parent) = &d.view.parent {
-                let field = d.field_types[parent.as_str()];
-                let id = e.get(manifest, parent).and_then(Value::unsigned);
-                origin.parent = field.object.as_deref().zip(id).map(|(object_type, id)| Key { object_type, id });
+                origin.parent = fields.iter().find(|(f, _)| &f.name == parent).and_then(|&(field, value)| {
+                    Some(Key { object_type: field.object.as_deref()?, id: value.unsigned()? })
+                });
             }
             let shown = |name: &str| name != track && d.consts.as_ref().is_none_or(|consts| consts.contains(&name));
-            for &(name, value) in fields.iter().filter(|(name, _)| shown(name)) {
-                let name_text = texts.get(name);
-                let value_text = texts.get(&text_of(d, name, value));
+            for &(field, value) in fields.iter().filter(|(f, _)| shown(&f.name)) {
+                let name_text = texts.get(&field.name);
+                let value_text = texts.get(&text_of(field, value));
                 row.fields.push(pb::Field { name: name_text, text: value_text, row: None });
             }
         }
@@ -278,11 +271,11 @@ fn convert<W: Write>(
         row.parent = origin.parent.and_then(|parent| index.get(&parent).copied());
         let fields = &origin.known;
         for name in d.view.label.fields() {
-            row.label.push(fields.get(name).map_or(0, |&value| texts.get(&text_of(d, name, value))));
+            row.label.push(fields.get(name).map_or(0, |&(field, value)| texts.get(&text_of(field, value))));
         }
         if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
-            let bits = fields.get(dis.bits.as_str()).and_then(|v| v.unsigned());
-            let pc = fields.get(dis.pc.as_str()).and_then(|v| v.unsigned());
+            let bits = fields.get(dis.bits.as_str()).and_then(|(_, v)| v.unsigned());
+            let pc = fields.get(dis.pc.as_str()).and_then(|(_, v)| v.unsigned());
             row.label.push(match (bits, pc) {
                 (Some(bits), Some(pc)) => texts.get(dasm.text(bits, pc)),
                 _ => 0,
