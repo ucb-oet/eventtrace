@@ -10,8 +10,10 @@
 //! it begins.
 //!
 //! An object set to a value at cycle c holds it from cycle c+1, and leaves it at the cycle after the event that moves
-//! or destroys it. Time is one nanosecond per cycle, so Perfetto's time axis reads in cycles. Objects that hold one
-//! value at the same time get lanes: a track gains a sibling while they overlap.
+//! or destroys it. An object created at cycle c holds, in c, the value the view gives its create event, if any, which
+//! the value it enters continues when the two are the same; the create event's arrows end at that slice. Time is one
+//! nanosecond per cycle, so Perfetto's time axis reads in cycles. Objects that hold one value at the same time get
+//! lanes: a track gains a sibling while they overlap.
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -155,8 +157,50 @@ pub fn run(args: Args) -> Result<()> {
 struct Drawn<'a> {
     view: &'a View,
     track_field: &'a FieldSchema,
+    /// By create event's short name, the value its object holds during that event's cycle.
+    created_in: HashMap<&'a str, Value>,
     resources: Resources,
     dasm: Option<Disassembler>,
+}
+
+/// Begins `key`'s slice holding `value` at cycle `at`, labelled from its create event, ending the arrows `flows`.
+#[allow(clippy::too_many_arguments)]
+fn begin<'a, W: Write>(
+    writer: &mut Writer<W>,
+    manifest: &'a Manifest,
+    d: &mut Drawn<'a>,
+    objects: &Objects<'a>,
+    slices: &mut IndexMap<Key<'a>, Slice>,
+    key: Key<'a>,
+    value: Value,
+    at: u64,
+    flows: Vec<u64>,
+) -> Result<()> {
+    let (object, id) = (key.object_type, key.id);
+    let title = text::value(manifest, d.track_field, value).to_string();
+    let (lane, track) = d.resources.take(writer, value, &title)?;
+    slices.insert(key, Slice { value, lane, track });
+    // The fields its create event set, but the track, and the instruction they hold.
+    let mut created: Vec<(String, String)> = Vec::new();
+    if let Some(create) = objects.create_event(&key) {
+        created = fields(manifest, create).into_iter().filter(|(name, _)| *name != d.view.tracks).collect();
+        if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
+            let bits = create.get(manifest, &dis.bits).and_then(Value::unsigned);
+            let pc = create.get(manifest, &dis.pc).and_then(Value::unsigned);
+            if let (Some(bits), Some(pc)) = (bits, pc) {
+                created.push(("asm".to_string(), dasm.text(bits, pc).to_string()));
+            }
+        }
+    }
+    let known = |name: &str| created.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+    let named: Vec<String> = d.view.label.fields().iter().filter_map(|&name| known(name)).collect();
+    let mut label = if named.is_empty() { format!("{object}#{id}") } else { named.join(" ") };
+    if let Some(asm) = known("asm") {
+        label = format!("{label}  {asm}");
+    }
+    let mut args = vec![("object".to_string(), format!("{object}#{id}"))];
+    args.extend(created);
+    writer.event(at, Type::SliceBegin, track, Some(label), args, vec![], flows)
 }
 
 fn convert<W: Write>(
@@ -212,9 +256,14 @@ fn convert<W: Write>(
             _ => HashMap::new(),
         };
         let dasm = view.disassemble.as_ref().map(|d| Disassembler::new(&d.isa)).transpose()?;
+        let created_in = view
+            .created_in
+            .keys()
+            .filter_map(|event| Some((event.as_str(), Value::Unsigned(view.created_in(manifest, event)?))))
+            .collect();
         let parent = writer.track(format!("{object} {}", view.tracks), None, None, true)?;
         let resources = Resources { parent, ranks, lanes: HashMap::new(), uuids: HashMap::new() };
-        drawn.insert(object, Drawn { view, track_field, resources, dasm });
+        drawn.insert(object, Drawn { view, track_field, created_in, resources, dasm });
     }
 
     let mut objects = Objects::new(manifest);
@@ -227,6 +276,7 @@ fn convert<W: Write>(
         last = cycle.cycle;
         // Every event of a cycle sees the state before its clock edge; their changes start at the next cycle.
         let mut ends: Vec<(Key, Option<&str>)> = Vec::new();
+        let mut creates: Vec<(Key, Value, Vec<u64>)> = Vec::new();
         let mut begins: Vec<(Key, Value, Vec<u64>)> = Vec::new();
         for e in &cycle.events {
             let Some(key) = Key::subject(manifest, e) else { continue };
@@ -234,10 +284,15 @@ fn convert<W: Write>(
             let schema = &manifest.events[e.event];
             let destroys = schema.lifecycle == Some(Lifecycle::Destroy);
             let value = if destroys { None } else { e.get(manifest, &d.view.tracks) };
+            let created = if schema.lifecycle == Some(Lifecycle::Create) {
+                d.created_in.get(schema.short_name()).copied()
+            } else {
+                None
+            };
             // The event's arrows end at its mark, on the subject's track, or at the slice it begins.
             let mark = slices.get(&key).filter(|_| marked.contains(&e.event)).map(|slice| slice.track);
             let mut flows = Vec::new();
-            if mark.is_some() || value.is_some() {
+            if mark.is_some() || value.is_some() || created.is_some() {
                 for &(id, object_type) in arrows.get(&e.event).into_iter().flatten() {
                     let Some(other) = e.get(manifest, id).and_then(Value::unsigned) else { continue };
                     if let Some(other) = slices.get(&Key { object_type, id: other }) {
@@ -255,6 +310,13 @@ fn convert<W: Write>(
             }
             if destroys {
                 ends.push((key, Some(schema.short_name())));
+            } else if let Some(stage) = created {
+                // Its create cycle, whose slice the value it enters continues if the same.
+                creates.push((key, stage, flows));
+                if let Some(value) = value.filter(|&value| value != stage) {
+                    ends.push((key, None));
+                    begins.push((key, value, vec![]));
+                }
             } else if let Some(value) = value {
                 if slices.contains_key(&key) {
                     ends.push((key, None));
@@ -263,6 +325,10 @@ fn convert<W: Write>(
             }
         }
         objects.commit(&cycle);
+        for (key, value, flows) in creates {
+            let d = drawn.get_mut(key.object_type).unwrap();
+            begin(&mut writer, manifest, d, &objects, &mut slices, key, value, cycle.cycle, flows)?;
+        }
         for (key, how) in ends {
             if let Some(slice) = slices.shift_remove(&key) {
                 let args = how.map(|how| vec![("end".to_string(), how.to_string())]).unwrap_or_default();
@@ -272,31 +338,7 @@ fn convert<W: Write>(
         }
         for (key, value, flows) in begins {
             let d = drawn.get_mut(key.object_type).unwrap();
-            let (object, id) = (key.object_type, key.id);
-            let title = text::value(manifest, d.track_field, value).to_string();
-            let (lane, track) = d.resources.take(&mut writer, value, &title)?;
-            slices.insert(key, Slice { value, lane, track });
-            // The fields its create event set, but the track, and the instruction they hold.
-            let mut created: Vec<(String, String)> = Vec::new();
-            if let Some(create) = objects.create_event(&key) {
-                created = fields(manifest, create).into_iter().filter(|(name, _)| *name != d.view.tracks).collect();
-                if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
-                    let bits = create.get(manifest, &dis.bits).and_then(Value::unsigned);
-                    let pc = create.get(manifest, &dis.pc).and_then(Value::unsigned);
-                    if let (Some(bits), Some(pc)) = (bits, pc) {
-                        created.push(("asm".to_string(), dasm.text(bits, pc).to_string()));
-                    }
-                }
-            }
-            let known = |name: &str| created.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
-            let named: Vec<String> = d.view.label.fields().iter().filter_map(|&name| known(name)).collect();
-            let mut label = if named.is_empty() { format!("{object}#{id}") } else { named.join(" ") };
-            if let Some(asm) = known("asm") {
-                label = format!("{label}  {asm}");
-            }
-            let mut args = vec![("object".to_string(), format!("{object}#{id}"))];
-            args.extend(created);
-            writer.event(cycle.cycle + 1, Type::SliceBegin, track, Some(label), args, vec![], flows)?;
+            begin(&mut writer, manifest, d, &objects, &mut slices, key, value, cycle.cycle + 1, flows)?;
         }
     }
     // Objects still live when the trace ends keep their last slice open to its end.

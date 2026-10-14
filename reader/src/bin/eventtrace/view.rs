@@ -21,7 +21,11 @@
 //!   PC-relative target made absolute, as in "0x80000000  j 0x80000050".
 //! - parent, optional: an Id field that the object's create event sets, naming the object it came from, of a type the
 //!   file also draws. In a waterfall, an object's row follows its parent's.
+//! - created_in, optional: for create events of the object, the stage it is in during the cycle the event fires, a
+//!   variant of the tracks field's enum, as in {"decode": "Decode"}. A stage set at cycle c holds from c+1, so without
+//!   it an object's create cycle is drawn in no stage.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use eventtrace::manifest::{FieldType, Lifecycle};
@@ -37,6 +41,8 @@ pub struct View {
     pub normal_end: Option<String>,
     pub disassemble: Option<Disassemble>,
     pub parent: Option<String>,
+    /// By create event's short name, the variant of the tracks field's enum its object is in during that event's cycle.
+    pub created_in: HashMap<String, String>,
 }
 
 /// One view as the file writes it, with its object type optional.
@@ -52,6 +58,8 @@ struct Written {
     normal_end: Option<String>,
     disassemble: Option<Disassemble>,
     parent: Option<String>,
+    #[serde(default)]
+    created_in: HashMap<String, String>,
 }
 
 /// One label field or several.
@@ -127,6 +135,7 @@ impl Written {
             normal_end: self.normal_end,
             disassemble: self.disassemble,
             parent: self.parent,
+            created_in: self.created_in,
         }
     }
 }
@@ -142,12 +151,25 @@ fn only_type(manifest: &Manifest) -> Result<&str> {
     }
 }
 
-/// A view's object type must have events, and its parent must be an Id field its create event sets, naming a type the
-/// file also draws.
+/// A view's object type must have events; each event it gives a create stage must be a create event of the type, and
+/// the stage a variant of its tracks field's enum; and its parent must be an Id field its create event sets, naming a
+/// type the file also draws.
 fn check(view: &View, views: &[View], manifest: &Manifest) -> Result<()> {
     let object = view.object.as_str();
     if !manifest.events.iter().any(|e| e.subject.as_deref() == Some(object)) {
         return Err(Error(format!("the view draws {object}, which no event of the manifest has as its subject")));
+    }
+    for (event, stage) in &view.created_in {
+        let schema = manifest.events.iter().find(|e| e.subject.as_deref() == Some(object) && e.short_name() == event);
+        if schema.is_none_or(|e| e.lifecycle != Some(Lifecycle::Create)) {
+            return Err(Error(format!("the view gives {event} a create stage, but it is not a create event of {object}")));
+        }
+        if created_stage(view, manifest, stage).is_none() {
+            return Err(Error(format!(
+                "the view creates {object} in {stage}, which is not a variant of the enum of its field {}",
+                view.tracks
+            )));
+        }
     }
     let Some(parent) = &view.parent else { return Ok(()) };
     let field = manifest
@@ -161,5 +183,23 @@ fn check(view: &View, views: &[View], manifest: &Manifest) -> Result<()> {
             "the parent of {object}, {parent}, must be an Id field that its create event sets, naming a type the view \
              draws"
         ))),
+    }
+}
+
+/// The value of `stage`, a variant of the enum of the view's tracks field.
+pub fn created_stage(view: &View, manifest: &Manifest, stage: &str) -> Option<u64> {
+    let field = manifest
+        .events
+        .iter()
+        .filter(|e| e.subject.as_deref() == Some(view.object.as_str()))
+        .find_map(|e| e.fields.iter().find(|f| f.name == view.tracks))?;
+    let enum_name = field.enum_name.as_ref().filter(|_| field.ty == FieldType::Enum)?;
+    manifest.enums.iter().find(|e| &e.name == enum_name)?.values.get(stage).copied()
+}
+
+impl View {
+    /// The value of the stage the subject of `event`, a create event, is in during its cycle, if the view gives one.
+    pub fn created_in(&self, manifest: &Manifest, event: &str) -> Option<u64> {
+        created_stage(self, manifest, self.created_in.get(event)?)
     }
 }

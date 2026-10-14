@@ -8,7 +8,8 @@
 //! first, by type and ID, then the others in the order they were created; each followed by its children, the objects
 //! naming it as their parent, in the same order. An object whose parent is not in the file is a root. An object set
 //! to a stage at cycle c is in it from cycle c+1, and one destroyed at cycle c leaves after cycle c; it is held in a
-//! stage for every cycle but the last, in which it moves on.
+//! stage for every cycle but the last, in which it moves on. An object created at cycle c is drawn in c only in the
+//! stage the view gives its create event, which the stage it enters continues when the two are the same.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -80,6 +81,8 @@ struct Drawn<'a> {
     /// The fields of its events, by name.
     field_types: HashMap<&'a str, &'a FieldSchema>,
     stage_of: HashMap<Value, u32>,
+    /// By create event's short name, the stage its object is in during that event's cycle.
+    created_in: HashMap<&'a str, u32>,
     dasm: Option<Disassembler>,
 }
 
@@ -151,12 +154,17 @@ fn convert<W: Write>(
                 values
             }
         };
-        let stage_of = stage_values.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+        let stage_of: HashMap<Value, u32> = stage_values.iter().enumerate().map(|(i, &v)| (v, i as u32)).collect();
+        let created_in = view
+            .created_in
+            .keys()
+            .filter_map(|event| Some((event.as_str(), stage_of[&Value::Unsigned(view.created_in(manifest, event)?)])))
+            .collect();
         let name = texts.get(object);
         let stages = stage_values.iter().map(|&v| texts.get(&text::value(manifest, track_type, v).to_string())).collect();
         file.types.push(pb::Type { name, stages });
         let dasm = view.disassemble.as_ref().map(|d| Disassembler::new(&d.isa)).transpose()?;
-        drawn.insert(object, Drawn { view, index: index as u32, field_types, stage_of, dasm });
+        drawn.insert(object, Drawn { view, index: index as u32, field_types, stage_of, created_in, dasm });
     }
     let text_of = |d: &Drawn, name: &str, value: Value| text::value(manifest, d.field_types[name], value).to_string();
     let present = |e: &Event| -> Vec<(&str, Value)> {
@@ -175,6 +183,11 @@ fn convert<W: Write>(
         let origin = origins.entry(key).or_default();
         let lifecycle = schema.lifecycle;
         let mut event = pb::Event { cycle: e.cycle, site: e.site_id, ..Default::default() };
+        if lifecycle == Some(Lifecycle::Create) {
+            if let Some(&stage) = d.created_in.get(schema.short_name()) {
+                row.segments.push(pb::Segment { from: e.cycle, stage, held: 0 });
+            }
+        }
         if lifecycle == Some(Lifecycle::Destroy) {
             event.effect = Some(Effect::Ends(true));
             row.end = Some(e.cycle + 1);
@@ -187,7 +200,10 @@ fn convert<W: Write>(
                 .get(&value)
                 .ok_or_else(|| Error(format!("{track} {value} at cycle {} is not one of the stages", e.cycle)))?;
             event.effect = Some(Effect::Enters(stage));
-            row.segments.push(pb::Segment { from: e.cycle + 1, stage, held: 0 });
+            // A create cycle's segment in the same stage continues into the next cycle.
+            if row.segments.last().is_none_or(|s| s.from != e.cycle || s.stage != stage) {
+                row.segments.push(pb::Segment { from: e.cycle + 1, stage, held: 0 });
+            }
         } else {
             event.effect = Some(Effect::Observes(true));
         }
