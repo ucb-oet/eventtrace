@@ -9,13 +9,15 @@
 //! naming it as their parent, in the same order. An object whose parent is not in the file is a root. An object set
 //! to a stage at cycle c is in it from cycle c+1, and one destroyed at cycle c leaves after cycle c; it is held in a
 //! stage for every cycle but the last, in which it moves on. An object created at cycle c is drawn in c only in the
-//! stage the view gives its create event, which the stage it enters continues when the two are the same.
+//! stage the view gives its create event, which the stage it enters continues when the two are the same. A row's
+//! fields are the object's const fields, as its create event set them, or, with a manifest that lists no object
+//! types, every field its create event set; the stage is left out either way.
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
-use eventtrace::manifest::{FieldSchema, FieldType, Lifecycle};
+use eventtrace::manifest::{FieldSchema, FieldType, Lifecycle, Property};
 use eventtrace::objects::Key;
 use eventtrace::text;
 use eventtrace::{Error, Event, Events, Manifest, Result, Value};
@@ -81,6 +83,8 @@ struct Drawn<'a> {
     /// The fields of its events, by name.
     field_types: HashMap<&'a str, &'a FieldSchema>,
     stage_of: HashMap<Value, u32>,
+    /// The object's const fields, if the manifest lists its type.
+    consts: Option<Vec<&'a str>>,
     /// By create event's short name, the stage its object is in during that event's cycle.
     created_in: HashMap<&'a str, u32>,
     dasm: Option<Disassembler>,
@@ -164,7 +168,11 @@ fn convert<W: Write>(
         let stages = stage_values.iter().map(|&v| texts.get(&text::value(manifest, track_type, v).to_string())).collect();
         file.types.push(pb::Type { name, stages });
         let dasm = view.disassemble.as_ref().map(|d| Disassembler::new(&d.isa)).transpose()?;
-        drawn.insert(object, Drawn { view, index: index as u32, field_types, stage_of, created_in, dasm });
+        let consts = manifest.object(object).map(|o| {
+            let consts = o.fields.iter().filter(|f| f.property == Some(Property::Const));
+            consts.map(|f| f.name.as_str()).collect()
+        });
+        drawn.insert(object, Drawn { view, index: index as u32, field_types, stage_of, consts, created_in, dasm });
     }
     let text_of = |d: &Drawn, name: &str, value: Value| text::value(manifest, d.field_types[name], value).to_string();
     let present = |e: &Event| -> Vec<(&str, Value)> {
@@ -228,7 +236,8 @@ fn convert<W: Write>(
                 let id = e.get(manifest, parent).and_then(Value::unsigned);
                 origin.parent = field.object.as_deref().zip(id).map(|(object_type, id)| Key { object_type, id });
             }
-            for &(name, value) in fields.iter().filter(|(name, _)| *name != track) {
+            let shown = |name: &str| name != track && d.consts.as_ref().is_none_or(|consts| consts.contains(&name));
+            for &(name, value) in fields.iter().filter(|(name, _)| shown(name)) {
                 let name_text = texts.get(name);
                 let value_text = texts.get(&text_of(d, name, value));
                 row.fields.push(pb::Field { name: name_text, text: value_text, row: None });

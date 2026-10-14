@@ -260,7 +260,7 @@ object EventTrace {
     */
   def manifest: String = {
     val sites = latest.map(resolvedSites).getOrElse(Seq.empty)
-    ManifestGen.json(EventSchema.fromSites(sites), sites)
+    ManifestGen.json(EventSchema.fromSites(sites), sites, latest.toSeq.flatMap(_.objectTypes.values))
   }
 
   /** Every site of an elaboration, each event-local field left `Absent` taking its type from the other sites. */
@@ -284,7 +284,8 @@ object EventTrace {
     RuntimeSources.foreach(f => sink.addResource(s"/eventtrace/csrc/$f"))
     chisel3.experimental.annotate(sink) {
       val sites = resolvedSites(d)
-      val manifestSha256 = ManifestGen.sha256(ManifestGen.json(EventSchema.fromSites(sites), sites))
+      val manifest = ManifestGen.json(EventSchema.fromSites(sites), sites, d.objectTypes.values.toSeq)
+      val manifestSha256 = ManifestGen.sha256(manifest)
       val header = CppGen.header(sites, d.objectTypes.values.toSeq, d.collections.toSeq, manifestSha256)
       Seq(BlackBoxInlineAnno(sink.toNamed, CppGen.FileName, header))
     }

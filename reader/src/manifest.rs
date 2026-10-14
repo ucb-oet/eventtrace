@@ -1,5 +1,6 @@
 //! The manifest, which the frontend writes at elaboration: each event with its subject, lifecycle, and fields, each
-//! enum, and each site.
+//! object type with its fields and their properties, each enum, and each site. A manifest older than object types
+//! lists none.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,6 +14,8 @@ use crate::{Error, Result};
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
     pub events: Vec<EventSchema>,
+    #[serde(default)]
+    pub objects: Vec<ObjectSchema>,
     pub enums: Vec<EnumSchema>,
     pub sites: Vec<Site>,
 
@@ -65,6 +68,24 @@ pub struct FieldSchema {
     /// Whether some site leaves the field Absent.
     #[serde(default)]
     pub optional: bool,
+    /// How often an object type's field may be assigned; an event's fields have none.
+    pub property: Option<Property>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Property {
+    /// Set by the create event and never again.
+    Const,
+    SetOnce,
+    Mutable,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ObjectSchema {
+    pub name: String,
+    /// In declaration order.
+    pub fields: Vec<FieldSchema>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -127,6 +148,11 @@ impl Manifest {
     /// The name of an enum's variant with this value.
     pub fn variant(&self, enum_name: &str, value: u64) -> Option<&str> {
         self.variants.get(enum_name)?.get(&value).map(String::as_str)
+    }
+
+    /// An object type, if the manifest lists object types.
+    pub fn object(&self, name: &str) -> Option<&ObjectSchema> {
+        self.objects.iter().find(|o| o.name == name)
     }
 
     /// The position of an event's field, in the manifest's order.
