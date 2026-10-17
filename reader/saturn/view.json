@@ -1,0 +1,30 @@
+[
+  {
+    "object": "fetch",
+    "tracks": "stage",
+    "label": "pc",
+    "hide": ["use"],
+    "normal_end": "use",
+    "created_in": {"lookup": "S1"}
+  },
+  {
+    "object": "instruction",
+    "tracks": "stage",
+    "label": "pc",
+    "hide": ["retire"],
+    "normal_end": "retire",
+    "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv64gcv"},
+    "parent": "fetch",
+    "created_in": {"decode": "Decode"}
+  },
+  {
+    "object": "vuop",
+    "tracks": "stage",
+    "label": "pc",
+    "hide": ["complete"],
+    "normal_end": "complete",
+    "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv64gcv"},
+    "parent": "instruction",
+    "created_in": {"dispatch": "Dispatch"}
+  }
+]
