@@ -6,10 +6,11 @@ description = "Reads EventTrace traces, and the tools built on reading them"
 publish = false
 
 [dependencies]
-capstone = { version = "0.14", default-features = false, features = ["full", "std", "arch_riscv"] }
 clap = { version = "4.6", features = ["derive"] }
 indexmap = { version = "2", features = ["serde"] }
 prost = "0.14"
+# Until a release of rvdasm has Insn::asm_no_aliases, the local checkout of its objdump-asm branch (b3e24af).
+rvdasm = { path = "../../../../rvdasm" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
