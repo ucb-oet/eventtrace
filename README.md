@@ -35,6 +35,9 @@ when (retire) {
 }
 ```
 
+The [documentation](docs/README.md) covers writing annotations, using EventTrace in Chipyard, reading traces, and the
+trace and manifest formats.
+
 ## Layout
 
 | Directory | Contents |
@@ -44,6 +47,7 @@ when (retire) {
 | `proto/eventtrace.proto` | The trace format. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, and Sodor. |
 | `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. |
+| `docs/` | The documentation. |
 
 ## Use in Chipyard
 
