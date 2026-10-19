@@ -14,7 +14,7 @@
 //!   variants' order.
 //! - label, optional: the field, or list of fields, labelling each object; by default, in Perfetto, its ID.
 //! - hide, optional: in Perfetto, events of the object neither marked nor drawing arrows.
-//! - normal_end, optional: in a waterfall, the event that ends an object normally, such as retire; objects ended by
+//! - normal_end, optional: in a waterfall, the event that ends an object normally, such as retire; an object ended by
 //!   any other event left without it. Without it, every end is normal.
 //! - disassemble, optional: the fields holding a RISC-V instruction and its PC, and the core's ISA string, of which
 //!   only XLEN and the C extension change decoding. Each object's label is followed by the instruction, with a

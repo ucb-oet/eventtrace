@@ -65,9 +65,6 @@ pub struct FieldSchema {
     pub enum_name: Option<String>,
     /// An Id field's object type.
     pub object: Option<String>,
-    /// Whether some site leaves the field Absent.
-    #[serde(default)]
-    pub optional: bool,
     /// How often an object type's field may be assigned; an event's fields have none.
     pub property: Option<Property>,
 }

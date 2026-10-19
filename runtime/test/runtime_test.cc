@@ -24,7 +24,7 @@ struct Handled {
   unsigned long long object_id;  // for sites 2 and 3, which create objects of types 0 and 1
 };
 
-// Site 0 has no payload; sites 1 to 3 have one word, and site 3 has two. Only site 3's event, sample, has fields.
+// Site 0 has no payload; sites 1 and 2 have one word, and site 3 has two. Only site 3's event, sample, has fields.
 class FakeSites final : public eventtrace::Sites {
  public:
   unsigned site_count() const override { return 4; }
@@ -152,7 +152,7 @@ int main() {
   runtime.accept(4, 0, nullptr, 0);
   expect(sites.handled.empty() && sites.commits.empty(), "records are ignored until a file is open");
   runtime.open("build/runtime_test.trace");
-  runtime.open("/nonexistent/eventtrace.log");
+  runtime.open("/nonexistent/eventtrace.trace");
 
   // Cycle 5 arrives as sites 3, 0, 2; cycle 6 as 1, 3. The payload buffer is reused, as a simulator's would be.
   uint32_t buffer[2];

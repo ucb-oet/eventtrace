@@ -44,7 +44,6 @@ class Store {
     return o;
   }
   void erase(unsigned long long id) { objects_.erase(id); }
-  std::size_t size() const { return objects_.size(); }
 
  private:
   std::unordered_map<unsigned long long, T> objects_;  // references stay valid as other objects come and go

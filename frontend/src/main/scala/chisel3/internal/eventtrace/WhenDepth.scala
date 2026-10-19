@@ -5,7 +5,8 @@ package chisel3.internal.eventtrace
   */
 
 /** Chisel tracks the enclosing `when` scopes only in its `Builder`. EventTrace compares this depth when an event opens
-  * and at each capture, to reject captures under a `when` nested inside the event.
+  * and at each capture, to reject captures under a `when` nested inside the event, and the edge helpers compare it to
+  * reject being built inside a `when`.
   */
 object WhenDepth {
   def apply(): Int = chisel3.internal.Builder.whenDepth

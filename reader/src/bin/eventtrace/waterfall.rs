@@ -10,8 +10,8 @@
 //! to a stage at cycle c is in it from cycle c+1, and one destroyed at cycle c leaves after cycle c; it is held in a
 //! stage for every cycle but the last, in which it moves on. An object created at cycle c is drawn in c only in the
 //! stage the view gives its create event, which the stage it enters continues when the two are the same. A row's
-//! fields are the object's const fields, as its create event set them, or, with a manifest that lists no object
-//! types, every field its create event set; the stage is left out either way.
+//! fields are the object's const fields, as its create event set them, or, with a manifest that does not list the
+//! object's fields, every field its create event set; the stage is left out either way.
 
 use std::collections::HashMap;
 use std::io::Write;

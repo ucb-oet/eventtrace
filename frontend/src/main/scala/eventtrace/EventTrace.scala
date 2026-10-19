@@ -17,7 +17,7 @@ import scala.util.DynamicVariable
   *   EventTrace.event("tick") { "count" := count }
   * }
   * when (enterDecode) {
-  *   Instruction.create(event = "decode") { i => i.pc := pc; i.stage := Stage.Decode; active.add(i) }
+  *   EventTrace.create(new Instruction, event = "decode") { i => i.pc := pc; i.stage := Stage.Decode; active.add(i) }
   * }
   * when (retire) {
   *   val i = active.head
@@ -30,7 +30,6 @@ import scala.util.DynamicVariable
   */
 object EventTrace {
   type ObjectType = eventtrace.ObjectType
-  type Schema[T <: eventtrace.ObjectType] = eventtrace.Schema[T]
   type Collection[T <: eventtrace.ObjectType] = eventtrace.Collection[T]
 
   /** Each field decodes into a C++ scalar, so it is at most this wide; a payload may span any number of words. */
@@ -125,8 +124,9 @@ object EventTrace {
   /** Turns tracing on, or off with `on = false`, for what is elaborated next.
     *
     * Tracing is off until a flow turns it on, so generators can carry annotations at no cost to builds that do not
-    * trace: event and create blocks are not even run, and no sink is built. Annotation mistakes therefore surface
-    * only in traced builds. In Chipyard, a config with `WithEventTrace` turns tracing on.
+    * trace: event and create blocks are not even run, and no sink is built, so mistakes inside them surface only in
+    * traced builds. Collections, object types, and queries built outside an event block are still declared and
+    * checked. In Chipyard, a config with `WithEventTrace` turns tracing on.
     */
   def enable(on: Boolean = true): Unit = tracing = on
 
@@ -162,15 +162,24 @@ object EventTrace {
     new Collection(info, () => gen)
   }
 
-  /** Runs a create block for `handle`; see [[Schema.create]]. */
-  private[eventtrace] def createSite(handle: ObjectType, event: String, sourceInfo: SourceInfo)(body: => Unit): Unit = if (tracing) {
-    val what = s"""create of "${handle.typeName}.$event""""
-    checkEventName(what, event, sourceInfo)
-    registerObjectType(handle, sourceInfo)
-    handle.binding = Binding.Created(open = true)
-    try site(what, event, Some(handle), created = true, sourceInfo)(body)
-    finally handle.binding = Binding.Created(open = false)
-  }
+  /** Creates an object of `gen`'s type on every clock edge at which the enclosing `when` conditions hold, as the create
+    * event named after the type and `event`, such as `packet.arrive`. The block receives the new object's handle, which
+    * exists only inside it, initializes its fields, and may add it to collections:
+    *
+    * {{{
+    * EventTrace.create(new Packet, event = "arrive") { p => p.seq := count; arrivals.add(p) }
+    * }}}
+    */
+  def create[T <: ObjectType](gen: => T, event: String)(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit =
+    if (tracing) {
+      val handle = gen
+      val what = s"""create of "${handle.typeName}.$event""""
+      checkEventName(what, event, sourceInfo)
+      registerObjectType(handle, sourceInfo)
+      handle.binding = Binding.Created(open = true)
+      try site(what, event, Some(handle), created = true, sourceInfo)(body(handle))
+      finally handle.binding = Binding.Created(open = false)
+    }
 
   /** Runs an event block whose subject is an existing object; see [[ObjectType.event]]. */
   private[eventtrace] def objectEvent(handle: ObjectType, event: String, sourceInfo: SourceInfo)(body: => Unit): Unit = if (tracing) {
@@ -388,17 +397,6 @@ object EventTrace {
     }
     siteLayouts += SiteLayout(siteId, written, subject.map(_.typeName), lifecycle, location(sourceInfo), fields, payloadWords,
       module, plan)
-
-    val summary = fields.map { f =>
-      f.source match {
-        case Packed(offset)  => s"${f.name}@$offset:${f.width}"
-        case Constant(value) => s"${f.name}=$value"
-        case Omitted         => s"${f.name}=Absent"
-        case Reference(_)    => s"${f.name}=id"
-      }
-    } ++ operandOffsets.map { case (op, offset) => s"query@$offset:${op.tpe.width}" }
-    val gated = if (guards.isEmpty) "" else s", gated by ${guards.length} test${if (guards.length > 1) "s" else ""}"
-    println(s"""[eventtrace] site $siteId "$name" at ${location(sourceInfo)}: [${summary.mkString(", ")}] in $payloadWords payload words$gated""")
   }
 
   /** Every handle a site resolves, starting from its subject, the handles whose IDs it captures, and the handles its
@@ -635,7 +633,7 @@ object EventTrace {
     CppGen.identifierError(name).foreach(reason => elaborationError(s"$what: $reason", sourceInfo))
 
   /** Object types become C++ namespaces, so their names follow the event-name rules; all instances of one object type
-    * must declare the same fields, which matters for parameterized schemas.
+    * must declare the same fields, which matters for an object type with parameters.
     */
   private def registerObjectType(handle: ObjectType, sourceInfo: SourceInfo): Unit = {
     val name = handle.typeName

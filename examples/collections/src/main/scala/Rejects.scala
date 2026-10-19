@@ -44,7 +44,7 @@ object Rejects extends App {
       EventTrace.event("r_bare") { active.remove(a) }
     }, "which has no subject and so no effects"),
     ("destroy in a create block", design { (a, _, active) =>
-      Instruction.create(event = "r_flash") { i => i.pc := a; i.odd := a(0); i.destroy() }
+      EventTrace.create(new Instruction, event = "r_flash") { i => i.pc := a; i.odd := a(0); i.destroy() }
     }, "no event both creates and destroys its subject"),
     ("destroy twice", design { (_, _, active) =>
       val a = active.head
@@ -78,7 +78,7 @@ object Rejects extends App {
       (new Instruction).event("r_unbound") {}
     }, "uses an object that no create block or query produced"),
     ("create handle in a query", design { (a, _, active) =>
-      Instruction.create(event = "r_young") { i =>
+      EventTrace.create(new Instruction, event = "r_young") { i =>
         i.pc := a; i.odd := a(0)
         "older" := active.where(_.id < i.id).last
       }
@@ -138,11 +138,11 @@ object Rejects extends App {
       r.event("r_late") { r.insn := active.head }
     }, "request.insn := assigns a const field outside its object's create block"),
     ("ID field left Absent", design { (_, _, _) =>
-      Request.create(event = "r_no_insn") { r => r.insn := Absent }
+      EventTrace.create(new Request, event = "r_no_insn") { r => r.insn := Absent }
     }, "does not initialize const field(s) insn; Absent does not count"),
     ("ID of another type", design { (_, _, _) =>
       val other = EventTrace.collection(new Request).head
-      Request.create(event = "r_wrong") { r => r.insn := other.id }
+      EventTrace.create(new Request, event = "r_wrong") { r => r.insn := other.id }
     }, "assigns the ID of an object of type request to a field holding IDs of type instruction")
   )
 

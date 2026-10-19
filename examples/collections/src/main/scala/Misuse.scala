@@ -12,13 +12,11 @@ class Cell extends EventTrace.ObjectType("cell") {
   val once  = setOnce(UInt(4.W))
   val value = mutable(UInt(4.W))
 }
-object Cell extends EventTrace.Schema(new Cell)
 
 /** An object type that no collection holds, so the runtime numbers its objects but does not keep them. */
 class Note extends EventTrace.ObjectType("note") {
   val v = const(UInt(4.W))
 }
-object Note extends EventTrace.Schema(new Note)
 
 /** Sites for the runtime's violation checks, which `violations.cc` drives with synthetic records rather than a
   * simulation: each fixture elaborates fine, and only some sequences of records break a rule. Every value is a
@@ -31,8 +29,8 @@ class Misuse extends Module {
   val b = EventTrace.collection(new Cell)
   val zero = a.where(_.key === 0.U).only
 
-  when (fire(0)) { Cell.create(event = "make0") { c => c.key := 0.U; a.add(c) } }
-  when (fire(1)) { Cell.create(event = "make1") { c => c.key := 1.U; a.add(c) } }
+  when (fire(0)) { EventTrace.create(new Cell, event = "make0") { c => c.key := 0.U; a.add(c) } }
+  when (fire(1)) { EventTrace.create(new Cell, event = "make1") { c => c.key := 1.U; a.add(c) } }
   when (fire(2)) { zero.event("set_once") { zero.once := 1.U } }
   when (fire(3)) { zero.event("poke") { zero.value := 1.U } }
   when (fire(4)) { zero.event("poke_again") { zero.value := 2.U } }
@@ -52,7 +50,7 @@ class Misuse extends Module {
   when (fire(18)) { a.where(_.once =/= 5.U).only.event("not_five") {} }
   when (fire(19)) { a.where(_.once === 0.U).head.event("zero_once") {} }
   when (fire(20)) { EventTrace.event("census") { "first" := a.head } }
-  when (fire(21)) { Note.create(event = "jot") { n => n.v := 1.U; "self" := n } }
+  when (fire(21)) { EventTrace.create(new Note, event = "jot") { n => n.v := 1.U; "self" := n } }
 }
 
 object MisuseMain extends App {

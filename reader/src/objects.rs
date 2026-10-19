@@ -96,10 +96,6 @@ impl<'m> Objects<'m> {
         }
     }
 
-    pub fn is_live(&self, key: &Key<'m>) -> bool {
-        self.live.contains_key(key)
-    }
-
     /// A live object's create event, if the trace has it.
     pub fn create_event(&self, key: &Key<'m>) -> Option<&Event> {
         self.live.get(key)?.as_ref()

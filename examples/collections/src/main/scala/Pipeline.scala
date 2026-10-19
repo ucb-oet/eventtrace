@@ -18,12 +18,10 @@ class Instruction extends EventTrace.ObjectType("instruction") {
   val stage  = mutable(Stage())
   val result = setOnce(UInt(8.W))
 }
-object Instruction extends EventTrace.Schema(new Instruction)
 
 class Request extends EventTrace.ObjectType("request") {
   val insn = const(Id(new Instruction))
 }
-object Request extends EventTrace.Schema(new Request)
 
 /** Collections fixture: a three-stage in-order pipeline, decode, execute, and writeback, whose instructions are
   * tracked in one collection. The counter drives it: when it is 5 mod 11, the instruction in execute squashes the
@@ -60,7 +58,7 @@ class Pipeline extends Module {
 
   // Site 0: join order is admission order.
   when (enter) {
-    Instruction.create(event = "decode") { i =>
+    EventTrace.create(new Instruction, event = "decode") { i =>
       i.pc := count; i.odd := count(0); i.stage := Stage.Decode
       active.add(i)
     }
@@ -130,7 +128,7 @@ class Pipeline extends Module {
   when (requestDone) { pending := false.B }
   when (issueRequest) {
     val by = active.where(_.stage === Stage.Execute).only
-    Request.create(event = "issue") { r => r.insn := by; requests.add(r) }
+    EventTrace.create(new Request, event = "issue") { r => r.insn := by; requests.add(r) }
   }
   when (requestDone) {
     val r = requests.head

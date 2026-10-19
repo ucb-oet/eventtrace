@@ -16,7 +16,7 @@ import chisel3.util.{HasExtModuleInline, HasExtModuleResource}
   * of `chisel3.ExtModule`, which has `setInline` and `addResource` built in; this spelling compiles on both Chisel 6.7
   * and 7.
   */
-private[eventtrace] class EventTraceSink(siteId: Int, val words: Int)
+private[eventtrace] class EventTraceSink(siteId: Int, words: Int)
     extends ExtModule(Map("SITE_ID" -> IntParam(siteId)))
     with HasExtModuleInline
     with HasExtModuleResource {

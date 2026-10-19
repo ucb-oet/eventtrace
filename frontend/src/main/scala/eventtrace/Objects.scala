@@ -24,7 +24,7 @@ object FieldProperty {
   *   val seq  = const(UInt(8.W))
   *   val kind = setOnce(UInt(2.W))
   * }
-  * object Packet extends EventTrace.Schema(new Packet)
+  * EventTrace.create(new Packet, event = "arrive") { p => p.seq := count }
   * }}}
   *
   * Field names come from the `val` names. All instances of one object type must declare the same fields. A handle
@@ -170,17 +170,4 @@ final class IdField[T <: ObjectType] private[eventtrace] (owner: ObjectType, nam
     extends ObjectField(owner, name, tpe, property) {
   def :=(handle: T)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignId(this, handle, sourceInfo)
   def :=(id: IdRef)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignId(this, id.handle, sourceInfo)
-}
-
-/** The companion of an object type, which creates objects: `Packet.create(event = "arrive") { p => ... }`. */
-abstract class Schema[T <: ObjectType](gen: => T) {
-
-  /** Creates an object of this type on every clock edge at which the enclosing `when` conditions hold. The block
-    * receives the new object's handle, which exists only inside it, and initializes its fields. The create event is
-    * named after the object type and `event`, such as `packet.arrive`.
-    */
-  def create(event: String)(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit = {
-    val handle = gen
-    EventTrace.createSite(handle, event, sourceInfo)(body(handle))
-  }
 }

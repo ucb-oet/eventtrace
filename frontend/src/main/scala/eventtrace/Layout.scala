@@ -47,10 +47,7 @@ private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType],
   private def resolved: FieldType = tpe.getOrElse(throw new IllegalStateException(s"field $name has no type yet"))
   def width: Int = resolved.width
   def signed: Boolean = resolved.signed
-  def isBool: Boolean = resolved.isBool
   def enumDef: Option[EnumDef] = resolved.enumDef
-  def idOf: Option[String] = resolved.idOf
-  def kind: String = resolved.kind
   def typeName: String = tpe.map(_.typeName).getOrElse("Absent")
 }
 
@@ -71,7 +68,7 @@ private[eventtrace] case class SiteLayout(
   fields:       Seq[FieldLayout],
   payloadWords: Int,
   module:       BaseModule,
-  plan:         Option[SitePlan] = None) {
+  plan:         Option[SitePlan]) {
 
   /** The event's name as consumers see it: `packet.arrive` for an event with a subject, else as written. */
   def name: String = SiteLayout.qualifiedName(subject, written)

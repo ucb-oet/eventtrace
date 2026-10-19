@@ -1,5 +1,5 @@
 // A copy of illilouette's proto/waterfall.proto, which illilouette owns: the format of the files that
-// `eventtrace waterfall` writes for its viewer. Copied from illilouette's commit 79ada17. illilouette keeps its
+// `eventtrace waterfall` writes for its viewer. Copied from illilouette's commit ce2a30c. illilouette keeps its
 // field numbers stable, so a copy that lags it still writes files the viewer reads.
 //
 // The waterfall file: what a post-processor writes from an EventTrace trace, its manifest, and the design's view
@@ -62,7 +62,9 @@ message Row {
   uint32 ended_by = 6;
   // Whether that event is its type's normal end. False for an object that left without, for example, retiring.
   bool normal_end = 7;
-  // The fields its create event set, other than its stage.
+  // The object's const fields, as its create event set them, such as an instruction's pc and bits. Fields of the
+  // create event itself, such as a stall's cause, are on that event. Files from a manifest that does not list the
+  // object's fields hold every field the create event set, other than its stage.
   repeated Field fields = 8;
   repeated Event events = 9;
   // The row index of its parent, as the view names it, such as an instruction's fetch packet. Absent for a root,
