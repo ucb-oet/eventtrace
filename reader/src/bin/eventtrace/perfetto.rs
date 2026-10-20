@@ -282,7 +282,7 @@ fn convert<W: Write>(
             let Some(key) = Key::subject(manifest, e) else { continue };
             let Some(d) = drawn.get(key.object_type) else { continue };
             let schema = &manifest.events[e.event];
-            let destroys = schema.lifecycle == Some(Lifecycle::Destroy);
+            let destroys = schema.lifecycle.is_some_and(Lifecycle::ends);
             let value = if destroys { None } else { e.get(manifest, &d.view.tracks) };
             let created = if schema.lifecycle == Some(Lifecycle::Create) {
                 d.created_in.get(schema.short_name()).copied()

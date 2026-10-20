@@ -154,7 +154,7 @@ fn replay(manifest: &Manifest, events: Events<std::fs::File>, problems: &mut Vec
                     problems.push(format!("cycle {c}: {name} on instruction#{i}, which is in {}", at(i)));
                 }
                 if name == "instruction.stall" {
-                    let blocker = unsigned(e, "blocker").unwrap_or(u64::MAX);
+                    let blocker = unsigned(e, "by").unwrap_or(u64::MAX);
                     if at(blocker) != "Execute" {
                         problems.push(format!("cycle {c}: stall blocked by instruction#{blocker}, which is not in Execute"));
                     }

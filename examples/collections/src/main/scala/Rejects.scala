@@ -9,6 +9,11 @@ class Token extends EventTrace.ObjectType("token") {
   val slot = const(UInt(4.W))
 }
 
+class TwoParents extends EventTrace.ObjectType("two_parents") {
+  val a = parent(new Instruction)
+  val b = parent(new Instruction)
+}
+
 /** A design whose body runs inside one module with an 8-bit input `a`, a signed one `s`, and a collection. */
 class Case(body: (UInt, SInt, EventTrace.Collection[Instruction]) => Unit) extends Module {
   val a = IO(Input(UInt(8.W)))
@@ -43,13 +48,33 @@ object Rejects extends App {
       val a = active.head
       EventTrace.event("r_bare") { active.remove(a) }
     }, "which has no subject and so no effects"),
-    ("destroy in a create block", design { (a, _, active) =>
-      EventTrace.create(new Instruction, event = "r_flash") { i => i.pc := a; i.odd := a(0); i.destroy() }
-    }, "no event both creates and destroys its subject"),
-    ("destroy twice", design { (_, _, active) =>
+    ("end in a create block", design { (a, _, active) =>
+      EventTrace.create(new Instruction, event = "r_flash") { i => i.pc := a; i.odd := a(0); i.complete() }
+    }, "no event both creates and ends its subject"),
+    ("end twice", design { (_, _, active) =>
       val a = active.head
-      a.event("r_twice") { active.remove(a); a.destroy(); a.destroy() }
-    }, "destroys the subject a second time"),
+      a.event("r_twice") { active.remove(a); a.complete(); a.abort() }
+    }, "ends the subject a second time"),
+    ("blocked twice", design { (_, _, active) =>
+      val a = active.head
+      a.event("r_block_twice") { a.blocked(); a.blocked() }
+    }, "says a second time that the subject is blocked"),
+    ("blocked by and aborted by in one event", design { (_, _, active) =>
+      val a = active.head; val b = active.last
+      a.event("r_two_bys") { active.remove(a); a.blocked(by = b); a.abort(by = b) }
+    }, "instruction.abort()'s by repeats a field of the same event"),
+    ("blocked on another object", design { (_, _, active) =>
+      val a = active.head; val b = active.last
+      a.event("r_block_other") { b.blocked() }
+    }, "instruction.blocked() acts on an object that is not the subject"),
+    ("namesakes giving by different roles", design { (_, _, active) =>
+      val a = active.head; val b = active.last
+      a.event("r_role") { a.blocked(by = b) }
+      a.event("r_role") { "by" := b }
+    }, "gives field by no role, but the site with the same name"),
+    ("two parents", design { (_, _, _) =>
+      EventTrace.create(new TwoParents, event = "r_two_parents") { t => t.a := Absent; t.b := Absent }
+    }, "object type two_parents declares parents a, b; a type has at most one"),
     ("const field after creation", design { (a, _, active) =>
       val i = active.head
       i.event("r_const") { i.pc := a }
@@ -128,11 +153,11 @@ object Rejects extends App {
       child.pc := a
       EventTrace.test(child.matching === 1) { EventTrace.event("r_far_test") {} }
     }, "uses a query comparing with a hardware value from another module"),
-    ("namesakes disagreeing on destroy", design { (_, _, active) =>
+    ("namesakes disagreeing on how they end", design { (_, _, active) =>
       val a = active.head; val b = active.last
-      a.event("r_end") { active.remove(a); a.destroy() }
-      b.event("r_end") {}
-    }, "disagree on creating or destroying their subject"),
+      a.event("r_end") { active.remove(a); a.complete() }
+      b.event("r_end") { active.remove(b); b.abort() }
+    }, "disagree on creating, completing, or aborting their subject"),
     ("ID field after creation", design { (_, _, active) =>
       val r = EventTrace.collection(new Request).head
       r.event("r_late") { r.insn := active.head }

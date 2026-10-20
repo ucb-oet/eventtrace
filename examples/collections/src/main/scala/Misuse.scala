@@ -39,8 +39,8 @@ class Misuse extends Module {
   when (fire(7)) { zero.event("join_b_again") { b.add(zero) } }
   when (fire(8)) { zero.event("leave_b") { b.remove(zero) } }
   when (fire(9)) { zero.event("leave_b_again") { b.remove(zero) } }
-  when (fire(10)) { zero.event("retire") { a.remove(zero); zero.destroy() } }
-  when (fire(11)) { zero.event("vanish") { zero.destroy() } }
+  when (fire(10)) { zero.event("retire") { a.remove(zero); zero.complete() } }
+  when (fire(11)) { zero.event("vanish") { zero.abort() } }
   when (fire(12)) { zero.event("poke_late") { zero.value := 3.U } }
   when (fire(13)) { b.head.event("first_b") {} }
   when (fire(14)) { a.at(2).event("third") {} }

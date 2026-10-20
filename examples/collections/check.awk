@@ -61,7 +61,7 @@ END {
     if (exeV)  emit(2, "writeback", exeId, sprintf("result=%d stage=Writeback", (exePc + 1) % 256))
     if (wbV)   emit(3, "retire", member[0], "")
     if (kill && decV) emit(4, "squash", decId, sprintf("by=instruction#%d", exeId))
-    if (stall && !was_stalled) emit(5, "stall", decId, sprintf("blocker=instruction#%d", exeId))
+    if (stall && !was_stalled) emit(5, "stall", decId, sprintf("by=instruction#%d", exeId))
     if (k % 5 == 0) {
       for (pass = 0; pass <= 1; pass++)
         for (odd = 0; odd <= 1; odd++)
@@ -102,9 +102,11 @@ END {
   for (i = 0; i < m && i < n; i++)
     if (got[i] != want[i]) { fail("record " i ": expected \"" want[i] "\", got \"" got[i] "\""); break }
 
-  split("\"name\": \"instruction.retire\",|\"lifecycle\": \"destroy\",|" \
-        "{\"name\": \"blocker\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
-        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
+  split("\"name\": \"instruction.retire\",|\"lifecycle\": \"complete\",|\"lifecycle\": \"abort\",|" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"role\": \"blocked_by\"}|" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"role\": \"aborted_by\"}|" \
+        "{\"name\": \"insn\", \"type\": \"Id\", \"object\": \"instruction\", \"property\": \"const\", \"role\": \"parent\"}|" \
+        "\"event_name\": \"instruction.stall\", |\"blocks\": true}|" \
         "\"name\": \"request.issue\",|{\"name\": \"insn\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
         "{\"name\": \"stage\", \"type\": \"Enum\", \"enum\": \"Stage\", \"width\": 2}|" \
         "{\"name\": \"Stage\", \"values\": {\"Decode\": 0, \"Execute\": 1, \"Writeback\": 2}}", entries, "|")

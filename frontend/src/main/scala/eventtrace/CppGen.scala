@@ -348,7 +348,7 @@ private[eventtrace] object CppGen {
     }
 
     /** Event fields holding an object's ID; the subject's is already in the record. */
-    private def references: Seq[String] = s.fields.collect { case FieldLayout(name, _, Reference(h)) =>
+    private def references: Seq[String] = s.fields.collect { case FieldLayout(name, _, Reference(h), _) =>
       s"e.$name = ${if (subject.exists(_ eq h)) "e.subject" else s"${handleVar(h)}->id"};"
     }
 

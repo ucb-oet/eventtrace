@@ -2,10 +2,12 @@ package eventtrace
 
 /** Generates the manifest for tools outside the simulator: what consumers see.
   *
-  * It lists each event name and its fields, sorted by name; each object type and its fields, in declaration order,
-  * each with its property, `const`, `setOnce`, or `mutable`; each enum that a field uses, with its variants; and a
-  * sites table mapping each site ID, which every record carries, to its event name, Chisel instance path, and
-  * source location. Payload bit layouts are internal and left out.
+  * It lists each event name, with its lifecycle (`create`, `complete`, or `abort`) and its fields, sorted by name;
+  * each object type and its fields, in declaration order, each with its property, `const`, `setOnce`, or `mutable`;
+  * each enum that a field uses, with its variants; and a sites table mapping each site ID, which every record
+  * carries, to its event name, Chisel instance path, and source location, and marking the sites that find their
+  * subject blocked. A field that names the object one came from, aborted it, or blocks it has a `role`. Payload bit
+  * layouts are internal and left out.
   *
   * Unlike the generated C++, the manifest describes the design rather than being compiled into the simulator, so it
   * does not travel through firtool; see [[EventTrace.manifest]].
@@ -23,7 +25,8 @@ private[eventtrace] object ManifestGen {
     def list(items: Seq[String]): String = if (items.isEmpty) "[]" else items.mkString("[\n", ",\n", "\n      ]")
     val entries = events.map { e =>
       val fields = e.fields.map { f =>
-        field(f.name, f.tpe.get, if (e.optional(f.name)) """, "optional": true""" else "")
+        val optional = if (e.optional(f.name)) """, "optional": true""" else ""
+        field(f.name, f.tpe.get, optional + e.roles.get(f.name).fold("")(r => s""", "role": "${r.written}""""))
       }
       val fieldList = list(fields)
       val subject = e.subject.map(s => s"""\n      "subject": ${quote(s)},""").getOrElse("")
@@ -40,7 +43,7 @@ private[eventtrace] object ManifestGen {
           case FieldProperty.SetOnce => "setOnce"
           case FieldProperty.Mutable => "mutable"
         }
-        field(f.name, f.tpe, s""", "property": "$property"""")
+        field(f.name, f.tpe, s""", "property": "$property"""" + f.role.fold("")(r => s""", "role": "${r.written}""""))
       }
       s"""    {
          |      "name": ${quote(t.name)},
@@ -55,7 +58,8 @@ private[eventtrace] object ManifestGen {
     }
     // One site per line, so that line-oriented tools can read the table too.
     val siteEntries = sites.sortBy(_.id).map { s =>
-      s"""    {"site_id": ${s.id}, "event_name": ${quote(s.name)}, "instance": ${quote(s.instance)}, "source": ${quote(s.location)}}"""
+      val blocks = if (s.blocks) """, "blocks": true""" else ""
+      s"""    {"site_id": ${s.id}, "event_name": ${quote(s.name)}, "instance": ${quote(s.instance)}, "source": ${quote(s.location)}$blocks}"""
     }
     s"""{
        |  "events": [

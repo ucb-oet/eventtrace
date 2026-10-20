@@ -190,12 +190,11 @@ fn convert<W: Write>(
                 row.segments.push(pb::Segment { from: e.cycle, stage, held: 0 });
             }
         }
-        if lifecycle == Some(Lifecycle::Destroy) {
+        if lifecycle.is_some_and(Lifecycle::ends) {
             event.effect = Some(Effect::Ends(true));
             row.end = Some(e.cycle + 1);
-            let short = schema.short_name();
-            row.ended_by = texts.get(short);
-            row.normal_end = d.view.normal_end.as_deref().is_none_or(|normal| normal == short);
+            row.ended_by = texts.get(schema.short_name());
+            row.normal_end = lifecycle == Some(Lifecycle::Complete);
         } else if let Some(value) = e.get(manifest, track) {
             let stage = *d
                 .stage_of
@@ -211,7 +210,7 @@ fn convert<W: Write>(
         }
         let fields: Vec<(&FieldSchema, Value)> = e.present_fields(manifest).collect();
         for &(field, value) in &fields {
-            if field.name == track && lifecycle != Some(Lifecycle::Destroy) {
+            if field.name == track && !lifecycle.is_some_and(Lifecycle::ends) {
                 continue;
             }
             let name_text = texts.get(&field.name);
@@ -224,7 +223,7 @@ fn convert<W: Write>(
         origin.known.extend(fields.iter().map(|&(field, value)| (field.name.as_str(), (field, value))));
         if lifecycle == Some(Lifecycle::Create) {
             origin.created = Some(order);
-            if let Some(parent) = &d.view.parent {
+            if let Some(parent) = manifest.object(&d.view.object).and_then(|o| o.parent()).map(|f| &f.name) {
                 origin.parent = fields.iter().find(|(f, _)| &f.name == parent).and_then(|&(field, value)| {
                     Some(Key { object_type: field.object.as_deref()?, id: value.unsigned()? })
                 });

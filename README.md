@@ -4,10 +4,10 @@ EventTrace records hardware events from annotations in Chisel generators, such a
 pipeline, and turns the recordings into views.
 
 You annotate a generator with events. An event can create an object, such as an instruction, which later events move
-through stages and finally destroy; collections and queries find the object an event acts on. A config that enables
-tracing elaborates capture hardware for the annotations, and a simulation then writes every event to a trace. The
-reader prints a trace, or converts it for [Perfetto](https://ui.perfetto.dev) or the
-[illilouette](https://github.com/ucb-oet/illilouette) waterfall viewer. A config that does not enable tracing
+through stages and finally end, by completing its work or by aborting; collections and queries find the object an
+event acts on. A config that enables tracing elaborates capture hardware for the annotations, and a simulation then
+writes every event to a trace. The reader prints a trace, or converts it for [Perfetto](https://ui.perfetto.dev) or
+the [illilouette](https://github.com/ucb-oet/illilouette) waterfall viewer. A config that does not enable tracing
 elaborates no tracing hardware.
 
 ```scala
@@ -31,7 +31,7 @@ when (enterDecode) {
 }
 when (retire) {
   val i = active.head
-  i.event("retire") { active.remove(i); i.destroy() }
+  i.event("retire") { active.remove(i); i.complete() }
 }
 ```
 

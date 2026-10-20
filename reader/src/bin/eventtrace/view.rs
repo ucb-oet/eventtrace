@@ -1,12 +1,13 @@
-//! A design's view: a small JSON file giving how to draw its objects, beyond what the manifest says. It is one view,
-//! as in
+//! A design's view: a small JSON file giving how to draw its objects, beyond what the manifest says. Which end of an
+//! object is normal, which field names its parent, and which events find it blocked come from the manifest. A view
+//! file is one view, as in
 //!
-//!   {"tracks": "stage", "label": "pc", "hide": ["retire"], "normal_end": "retire",
+//!   {"tracks": "stage", "label": "pc", "hide": ["retire"],
 //!    "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv32i"}}
 //!
 //! or a list of views, one per object type to draw, in the order the viewer offers the types, as in
 //!
-//!   [{"object": "instruction", "tracks": "stage", "label": "pc", "parent": "fetch"},
+//!   [{"object": "instruction", "tracks": "stage", "label": "pc"},
 //!    {"object": "fetch", "tracks": "stage", "label": "pc"}]
 //!
 //! - object: the object type to draw. A single view may leave it out when the manifest has only one type.
@@ -14,13 +15,9 @@
 //!   variants' order.
 //! - label, optional: the field, or list of fields, labelling each object; by default, in Perfetto, its ID.
 //! - hide, optional: in Perfetto, events of the object neither marked nor drawing arrows.
-//! - normal_end, optional: in a waterfall, the event that ends an object normally, such as retire; an object ended by
-//!   any other event left without it. Without it, every end is normal.
 //! - disassemble, optional: the fields holding a RISC-V instruction and its PC, and the core's ISA string, of which
 //!   only XLEN and the C extension change decoding. Each object's label is followed by the instruction, with a
 //!   PC-relative target made absolute, as in "0x80000000  j 0x80000050".
-//! - parent, optional: an Id field that the object's create event sets, naming the object it came from, of a type the
-//!   file also draws. In a waterfall, an object's row follows its parent's.
 //! - created_in, optional: for create events of the object, the stage it is in during the cycle the event fires, a
 //!   variant of the tracks field's enum, as in {"decode": "Decode"}. A stage set at cycle c holds from c+1, so without
 //!   it an object's create cycle is drawn in no stage.
@@ -38,9 +35,7 @@ pub struct View {
     pub tracks: String,
     pub label: Labels,
     pub hide: Vec<String>,
-    pub normal_end: Option<String>,
     pub disassemble: Option<Disassemble>,
-    pub parent: Option<String>,
     /// By create event's short name, the variant of the tracks field's enum its object is in during that event's cycle.
     pub created_in: HashMap<String, String>,
 }
@@ -55,9 +50,7 @@ struct Written {
     label: Labels,
     #[serde(default)]
     hide: Vec<String>,
-    normal_end: Option<String>,
     disassemble: Option<Disassemble>,
-    parent: Option<String>,
     #[serde(default)]
     created_in: HashMap<String, String>,
 }
@@ -120,7 +113,7 @@ pub fn load(path: &Path, manifest: &Manifest) -> Result<Vec<View>> {
         vec![written.into_view(object)]
     };
     for view in &views {
-        check(view, &views, manifest)?;
+        check(view, manifest)?;
     }
     Ok(views)
 }
@@ -132,9 +125,7 @@ impl Written {
             tracks: self.tracks,
             label: self.label,
             hide: self.hide,
-            normal_end: self.normal_end,
             disassemble: self.disassemble,
-            parent: self.parent,
             created_in: self.created_in,
         }
     }
@@ -152,9 +143,8 @@ fn only_type(manifest: &Manifest) -> Result<&str> {
 }
 
 /// A view's object type must have events; each event it gives a create stage must be a create event of the type, and
-/// the stage a variant of its tracks field's enum; and its parent must be an Id field its create event sets, naming a
-/// type the file also draws.
-fn check(view: &View, views: &[View], manifest: &Manifest) -> Result<()> {
+/// the stage a variant of its tracks field's enum.
+fn check(view: &View, manifest: &Manifest) -> Result<()> {
     let object = view.object.as_str();
     if !manifest.events.iter().any(|e| e.subject.as_deref() == Some(object)) {
         return Err(Error(format!("the view draws {object}, which no event of the manifest has as its subject")));
@@ -171,19 +161,7 @@ fn check(view: &View, views: &[View], manifest: &Manifest) -> Result<()> {
             )));
         }
     }
-    let Some(parent) = &view.parent else { return Ok(()) };
-    let field = manifest
-        .events
-        .iter()
-        .filter(|e| e.subject.as_deref() == Some(object) && e.lifecycle == Some(Lifecycle::Create))
-        .find_map(|e| e.fields.iter().find(|f| &f.name == parent));
-    match field {
-        Some(f) if f.ty == FieldType::Id && views.iter().any(|v| Some(&v.object) == f.object.as_ref()) => Ok(()),
-        _ => Err(Error(format!(
-            "the parent of {object}, {parent}, must be an Id field that its create event sets, naming a type the view \
-             draws"
-        ))),
-    }
+    Ok(())
 }
 
 /// The value of `stage`, a variant of the enum of the view's tracks field.

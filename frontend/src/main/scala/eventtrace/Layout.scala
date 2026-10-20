@@ -41,9 +41,13 @@ private[eventtrace] case object Omitted extends FieldSource
 private[eventtrace] case class Reference(handle: ObjectType) extends FieldSource
 
 /** One field of a site. An event-local field left `Absent` has no type until [[EventSchema.resolve]] takes it from
-  * a site sharing its event name.
+  * a site sharing its event name. `role` is set for the `by` field of `abort` or `blocked`.
   */
-private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType], source: FieldSource) {
+private[eventtrace] case class FieldLayout(
+  name:   String,
+  tpe:    Option[FieldType],
+  source: FieldSource,
+  role:   Option[FieldRole] = None) {
   private def resolved: FieldType = tpe.getOrElse(throw new IllegalStateException(s"field $name has no type yet"))
   def width: Int = resolved.width
   def signed: Boolean = resolved.signed
@@ -56,7 +60,8 @@ private[eventtrace] case class FieldLayout(name: String, tpe: Option[FieldType],
   *
   * @param written   the event name as written at the site, such as `arrive`
   * @param subject   the subject's object type, such as `packet`, for an event with a subject
-  * @param lifecycle `create` for a create event, `destroy` for one that destroys its subject
+  * @param lifecycle `create` for a create event, `complete` or `abort` for one that ends its subject
+  * @param blocks    whether the site finds its subject blocked
   * @param plan      how the runtime handles the site's records, for an event with a subject, a captured ID, or a test
   */
 private[eventtrace] case class SiteLayout(
@@ -64,6 +69,7 @@ private[eventtrace] case class SiteLayout(
   written:      String,
   subject:      Option[String],
   lifecycle:    Option[String],
+  blocks:       Boolean,
   location:     String,
   fields:       Seq[FieldLayout],
   payloadWords: Int,
@@ -107,8 +113,8 @@ private[eventtrace] object SiteLayout {
   def qualifiedName(subject: Option[String], written: String): String = subject.fold(written)(s => s"$s.$written")
 }
 
-/** The format consumers see for one event name, whichever site emitted it: its fields, sorted by name, and which of
-  * them some site leaves `Absent`.
+/** The format consumers see for one event name, whichever site emitted it: its fields, sorted by name, which of them
+  * some site leaves `Absent`, and the role some site gives a field.
   */
 private[eventtrace] case class EventSchema(
   name:      String,
@@ -117,6 +123,7 @@ private[eventtrace] case class EventSchema(
   lifecycle: Option[String],
   fields:    Seq[FieldLayout],
   optional:  Set[String],
+  roles:     Map[String, FieldRole],
   sites:     Seq[SiteLayout])
 
 private[eventtrace] object EventSchema {
@@ -128,7 +135,7 @@ private[eventtrace] object EventSchema {
     */
   def resolve(sites: Seq[SiteLayout]): Either[Seq[String], Seq[SiteLayout]] = {
     val types = sites.groupBy(_.name).map { case (name, group) =>
-      name -> group.flatMap(_.fields).collect { case FieldLayout(field, Some(t), _) => field -> t }.toMap
+      name -> group.flatMap(_.fields).collect { case FieldLayout(field, Some(t), _, _) => field -> t }.toMap
     }
     val untyped = sites.groupBy(_.name).toSeq.sortBy(_._1).flatMap { case (name, group) =>
       group.flatMap(_.fields.map(_.name)).distinct.filterNot(types(name).contains).map { field =>
@@ -143,7 +150,9 @@ private[eventtrace] object EventSchema {
   def fromSites(sites: Seq[SiteLayout]): Seq[EventSchema] =
     sites.groupBy(_.name).toSeq.sortBy(_._1).map { case (name, group) =>
       val first = group.minBy(_.id)
-      val optional = group.flatMap(_.fields).collect { case FieldLayout(field, _, Omitted) => field }.toSet
-      EventSchema(name, first.written, first.subject, first.lifecycle, first.fields.sortBy(_.name), optional, group.sortBy(_.id))
+      val optional = group.flatMap(_.fields).collect { case FieldLayout(field, _, Omitted, _) => field }.toSet
+      val roles = group.flatMap(_.fields).collect { case FieldLayout(field, _, _, Some(role)) => field -> role }.toMap
+      EventSchema(name, first.written, first.subject, first.lifecycle, first.fields.sortBy(_.name), optional, roles,
+        group.sortBy(_.id))
     }
 }

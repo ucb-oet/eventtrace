@@ -1,6 +1,7 @@
 //! The manifest, which the frontend writes at elaboration: each event with its subject, lifecycle, and fields, each
-//! object type with its fields and their properties, each enum, and each site. A manifest older than object types
-//! lists none.
+//! object type with its fields and their properties, each enum, and each site, marking those that find their subject
+//! blocked. A field naming the object one came from, aborted it, or blocks it has a role. A manifest older than object
+//! types lists none.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,7 +51,29 @@ impl EventSchema {
 #[serde(rename_all = "lowercase")]
 pub enum Lifecycle {
     Create,
-    Destroy,
+    /// Ends the subject normally, having done its work.
+    Complete,
+    /// Ends the subject abnormally, before it finished its work.
+    Abort,
+}
+
+impl Lifecycle {
+    /// Whether the event ends its subject's life.
+    pub fn ends(self) -> bool {
+        matches!(self, Lifecycle::Complete | Lifecycle::Abort)
+    }
+}
+
+/// What a field naming another object means, beyond its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    /// An object field: the object this one came from.
+    Parent,
+    /// The object that aborted the subject.
+    AbortedBy,
+    /// The object the subject is blocked by.
+    BlockedBy,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +90,7 @@ pub struct FieldSchema {
     pub object: Option<String>,
     /// How often an object type's field may be assigned; an event's fields have none.
     pub property: Option<Property>,
+    pub role: Option<Role>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -83,6 +107,13 @@ pub struct ObjectSchema {
     pub name: String,
     /// In declaration order.
     pub fields: Vec<FieldSchema>,
+}
+
+impl ObjectSchema {
+    /// The field naming the object this one came from, if the type has one.
+    pub fn parent(&self) -> Option<&FieldSchema> {
+        self.fields.iter().find(|f| f.role == Some(Role::Parent))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -107,6 +138,9 @@ pub struct Site {
     pub event_name: String,
     pub instance: String,
     pub source: String,
+    /// Whether the site's records find their subject blocked.
+    #[serde(default)]
+    pub blocks: bool,
 }
 
 impl Manifest {

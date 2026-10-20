@@ -14,13 +14,15 @@ converts it into views for [Perfetto](https://ui.perfetto.dev) or the
   different places; they then must declare the same fields.
 - **Object.** Something with a lifetime, such as an instruction or a fetch packet. An object has a type, declared as
   a Scala class, and an ID that counts from 0 within its type. A create event starts its life, later events change
-  its fields, and a destroy event ends it. An object's fields are `const` (set when it is created), `setOnce`, or
+  its fields, and an event ends it, either normally, having completed its work, or by aborting it. An object's fields are `const` (set when it is created), `setOnce`, or
   `mutable`.
 - **Subject.** The object an event is about. An event without a subject records values only.
 - **Collection.** A set of live objects, in the order they joined it. Queries over a collection find the object an
   event acts on, such as "the instruction in Execute" or "the oldest instruction".
-- **Effect.** A change an event makes to its subject: assigning a field, joining or leaving a collection, or being
-  destroyed.
+- **Effect.** A change an event makes to its subject: assigning a field, joining or leaving a collection, or ending
+  its life.
+- **Block.** An event may say that its subject is blocked, waiting rather than making progress, and by which object.
+  Together with aborts, blocks are what viewers highlight.
 
 A short example, from a pipeline:
 
@@ -39,7 +41,7 @@ when (issue) {
 }
 when (retire) {
   val i = active.head
-  i.event("retire") { active.remove(i); i.destroy() }
+  i.event("retire") { active.remove(i); i.complete() }
 }
 ```
 
@@ -49,7 +51,7 @@ An event at cycle c sees the state from before clock edge c. Its effects hold fr
 does not see an object created at cycle c, and it sees a field's value from before any assignment at cycle c.
 
 The events of one cycle happen together. The runtime handles them in site order, which is the order in which the
-sites were elaborated, and numbers them in that order. That order is not causal: an object's destroy event may
+sites were elaborated, and numbers them in that order. That order is not causal: an object's ending event may
 come before another of its events in the same cycle.
 
 ## How a trace is produced

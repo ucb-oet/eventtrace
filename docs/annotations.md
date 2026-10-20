@@ -25,7 +25,9 @@ when (fire) {
 
 - a `Bool`, `UInt`, or `SInt` of known width, at most 64 bits. Split anything wider into several fields;
 - a `ChiselEnum` value; see [Enums](#enums);
-- an object's ID: `"blocker" := handle`, or `"blocker" := handle.id`. The trace shows it as `type#id`.
+- an object's ID: `"source" := handle`, or `"source" := handle.id`. The trace shows it as `type#id`. To name the
+  object that aborts or blocks the subject, use `abort(by = ...)` or `blocked(by = ...)` instead; see
+  [Ending objects](#ending-objects) and [Blocked objects](#blocked-objects).
 
 A literal, such as `0.U(1.W)`, is not sent from the hardware: elaboration knows it, so it costs nothing in simulation.
 
@@ -79,7 +81,7 @@ An object type is a class that extends `EventTrace.ObjectType`. Its fields are `
 class Instruction(pcBits: Int) extends EventTrace.ObjectType("instruction") {
   val pc    = const(UInt(pcBits.W))
   val bits  = const(UInt(32.W))
-  val fetch = const(Id(new Fetch(pcBits)))  // the fetch packet it came from
+  val fetch = parent(new Fetch(pcBits))     // the fetch packet it came from
   val stage = mutable(Stage())
 }
 ```
@@ -91,8 +93,10 @@ Each field has a property:
 - `mutable`: unset at first, then assigned any number of times.
 
 A field may be a `Bool`, `UInt`, `SInt`, or `ChiselEnum`, as for captures. A `const` field may also hold the ID of
-another object, declared with `Id(new T)`. Readers can then follow it, for example from an instruction to its fetch
-packet.
+another object, declared with `Id(new T)`. Readers can then follow it.
+
+`parent(new T)` declares a `const` field holding the ID of the object this one came from, such as an instruction's
+fetch packet. Viewers use it to place an object under its parent. A type has at most one parent field.
 
 A type may take parameters, such as a width, but every instance in one design must declare the same fields with the
 same types. A type has at most 64 fields. Its name follows the event-name rules, and may not be the name of an event
@@ -144,10 +148,53 @@ change the object from the next cycle. The rules for assigning a field:
   assigned again; the runtime checks this.
 - `i.cause := Absent` leaves the stored value as it is. It does not use up a `setOnce` field.
 
-`handle.destroy()` ends the object's life when the event fires. Only the event's subject can be destroyed, and by
-the end of the cycle it must have left every collection, through a `remove` in the same block or in an earlier cycle:
-no other event may have an effect on an object in the cycle it is destroyed. No event may both create and destroy its
-subject, and sites sharing an event name must agree on whether they create or destroy.
+## Ending objects
+
+An object's life ends with one of two calls, which say how it ended:
+
+- `handle.complete()`: the object finished its work and ends normally, as an instruction that retires.
+- `handle.abort()`: the object ends before finishing its work, as an instruction that is squashed, flushed, or
+  replayed. `handle.abort(by = other)` also names the object responsible, in the field `by`.
+
+```scala
+i.event("retire") { active.remove(i); i.complete() }
+i.event("squash") { active.remove(i); i.abort(by = branch) }
+```
+
+Only the event's subject can end, and by the end of the cycle it must have left every collection, through a `remove`
+in the same block or in an earlier cycle: no other event may have an effect on an object in the cycle it ends. No
+event may both create and end its subject, and sites sharing an event name must agree on whether they create,
+complete, or abort.
+
+## Blocked objects
+
+`handle.blocked()` says that the event finds its subject blocked: waiting, rather than making progress.
+`handle.blocked(by = other)` also names the object it waits on, in the field `by`:
+
+```scala
+when (stallBegins) {
+  waiting.event("stall") { waiting.blocked(by = blocker) }
+}
+when (memWaitBegins) {
+  i.event("mem_wait") { i.blocked() }
+}
+```
+
+`blocked` may also be called in a create block, for an object that is blocked from the cycle it is created.
+
+## The by field
+
+`abort(by = ...)` and `blocked(by = ...)` capture the field `by`, and give it a role: the object that aborted the
+subject, or the object it is blocked by. Viewers draw these links differently from other fields. Sites that share an
+event name must declare `by` as for any other field, so a site with no object to name writes `by = Absent`:
+
+```scala
+u.event("stall") { "cause" := cause; u.blocked(by = vuopWithTag(tag)) }
+u.event("stall") { "cause" := cause; u.blocked(by = Absent) }
+```
+
+A site that neither aborts nor blocks its subject, but shares its event name with sites that do, declares the field
+as a plain capture, `"by" := Absent`. Sites that give `by` a value, or a role, must give it the same role.
 
 ## Collections
 
@@ -220,7 +267,7 @@ once, and the runtime loops over the members:
 when (take_pc_mem) {
   val branch = active.where(_.stage === Stage.Memory).only
   active.where(i => i.stage === Stage.Execute || i.stage === Stage.Decode).iter { i =>
-    i.event("squash") { "by" := branch; active.remove(i); i.destroy() }
+    i.event("squash") { active.remove(i); i.abort(by = branch) }
   }
 }
 ```
@@ -238,7 +285,7 @@ when (wb_valid) {
   val writeback = active.where(_.stage === Stage.Writeback)
   EventTrace.test(writeback.size === 1) {
     val i = writeback.only
-    i.event("retire") { active.remove(i); i.destroy() }
+    i.event("retire") { active.remove(i); i.complete() }
   }.otherwise {
     EventTrace.event("idle") { "count" := count }
   }
@@ -260,7 +307,7 @@ one. They turn a condition that lasts several cycles into one event:
 ```scala
 val stallBegins = Utils.rising(stall)
 when (stallBegins) {
-  waiting.event("stall") { "blocker" := blocker }
+  waiting.event("stall") { waiting.blocked(by = blocker) }
 }
 ```
 
@@ -274,7 +321,8 @@ Elaboration stops with an error that names the source line when an annotation br
 - names, widths, and types, as above;
 - every `const` field is set by the create block, and no field is assigned twice in one block;
 - a block never captures and assigns the same name;
-- sites that share an event name have the same fields and types, and agree on creating and destroying;
+- sites that share an event name have the same fields and types, give a field the same role, and agree on creating,
+  completing, and aborting;
 - effects act only on the event's subject;
 - handles are used only where they are valid;
 - events, `iter`, and tests do not nest in ways the library does not support;
@@ -289,7 +337,7 @@ Some rules depend on the simulation, so the runtime checks them as it handles ea
 - an object joins a collection only if it is not already a member, and leaves only if it is one;
 - a `setOnce` field is assigned only once;
 - no field is assigned by two events in one cycle;
-- a destroyed object has no other effects in its last cycle and has left every collection;
+- an object that ends has no other effects in its last cycle, and has left every collection;
 - a site fires at most once per cycle.
 
 The runtime checks these rules only while it records, that is, when the simulation was given `+eventtrace=<path>`.

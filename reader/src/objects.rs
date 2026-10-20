@@ -85,7 +85,7 @@ impl<'m> Objects<'m> {
                 Some(Lifecycle::Create) => {
                     self.live.insert(key, Some(event.clone()));
                 }
-                Some(Lifecycle::Destroy) => destroyed.push(key),
+                Some(Lifecycle::Complete | Lifecycle::Abort) => destroyed.push(key),
                 None => {
                     self.live.entry(key).or_insert(None);
                 }

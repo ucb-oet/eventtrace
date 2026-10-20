@@ -20,7 +20,7 @@ class Instruction extends EventTrace.ObjectType("instruction") {
 }
 
 class Request extends EventTrace.ObjectType("request") {
-  val insn = const(Id(new Instruction))
+  val insn = parent(new Instruction)  // the instruction that issued it
 }
 
 /** Collections fixture: a three-stage in-order pipeline, decode, execute, and writeback, whose instructions are
@@ -76,21 +76,21 @@ class Pipeline extends Module {
   // Site 3: the oldest instruction retires.
   when (wbV) {
     val i = active.head
-    i.event("retire") { active.remove(i); i.destroy() }
+    i.event("retire") { active.remove(i); i.complete() }
   }
   // Site 4: one handle feeds another query; one record squashes every younger instruction, here at most one.
   when (kill) {
     val br = active.where(_.stage === Stage.Execute).only
     active.where(_.id > br.id).iter { i =>
-      i.event("squash") { "by" := br; active.remove(i); i.destroy() }
+      i.event("squash") { active.remove(i); i.abort(by = br) }
     }
   }
-  // Site 5: an object reference as a field.
+  // Site 5: an object reference as a field, naming what blocks the subject.
   val stallBegins = Utils.rising(stall)
   when (stallBegins) {
     val waiting = active.where(_.stage === Stage.Decode).only
     val blocker = active.where(_.stage === Stage.Execute).only
-    waiting.event("stall") { "blocker" := blocker }
+    waiting.event("stall") { waiting.blocked(by = blocker) }
   }
   // Sites 6 and 7: two events per member, even PCs before odd ones and otherwise in join order.
   when (count % 5.U === 0.U) {
@@ -132,7 +132,7 @@ class Pipeline extends Module {
   }
   when (requestDone) {
     val r = requests.head
-    r.event("done") { requests.remove(r); r.destroy() }
+    r.event("done") { requests.remove(r); r.complete() }
   }
   // Site 15: a hardware Bool as a term of a query, which travels in the payload: with bit 1 of the counter set, the
   // oldest instruction, else the one in decode.

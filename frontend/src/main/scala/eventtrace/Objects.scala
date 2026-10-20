@@ -3,6 +3,16 @@ package eventtrace
 import chisel3._
 import chisel3.experimental.SourceInfo
 
+/** What a field that names another object means, beyond its value: the object one came from, the object that
+  * aborted it, or the object it is blocked by. Viewers draw these links differently from other fields.
+  */
+sealed abstract class FieldRole(val written: String)
+object FieldRole {
+  case object Parent extends FieldRole("parent")
+  case object AbortedBy extends FieldRole("aborted_by")
+  case object BlockedBy extends FieldRole("blocked_by")
+}
+
 /** How often an object field may be assigned. */
 sealed trait FieldProperty
 object FieldProperty {
@@ -47,10 +57,36 @@ abstract class ObjectType(val typeName: String) {
   final def event(name: String)(body: => Unit)(implicit sourceInfo: SourceInfo): Unit =
     EventTrace.objectEvent(this, name, sourceInfo)(body)
 
-  /** Ends this object's lifetime when the open event fires. Only the event's subject may be destroyed, and it must
-    * have left every collection by then.
+  /** Ends this object's life normally, having done its work, when the open event fires, as a retire does. Only the
+    * event's subject may end, and it must have left every collection by then.
     */
-  final def destroy()(implicit sourceInfo: SourceInfo): Unit = EventTrace.destroy(this, sourceInfo)
+  final def complete()(implicit sourceInfo: SourceInfo): Unit = EventTrace.end(this, normal = true, None, sourceInfo)
+
+  /** Ends this object's life abnormally, before it finished its work, when the open event fires, as a squash does. */
+  final def abort()(implicit sourceInfo: SourceInfo): Unit = EventTrace.end(this, normal = false, None, sourceInfo)
+
+  /** Ends this object's life abnormally because of `by`, which the record names in its field `by`. `Absent` declares
+    * the field at a site that has no object to name, as its namesakes do.
+    */
+  final def abort(by: ObjectType)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.end(this, normal = false, Some(Some(by)), sourceInfo)
+  final def abort(by: IdRef)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.end(this, normal = false, Some(Some(by.handle)), sourceInfo)
+  final def abort(by: EventTrace.syntax.Absent.type)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.end(this, normal = false, Some(None), sourceInfo)
+
+  /** Says that this event finds this object blocked: waiting, rather than making progress. */
+  final def blocked()(implicit sourceInfo: SourceInfo): Unit = EventTrace.blocked(this, None, sourceInfo)
+
+  /** Says that this event finds this object blocked by `by`, which the record names in its field `by`. `Absent`
+    * declares the field at a site that has no object to name, as its namesakes do.
+    */
+  final def blocked(by: ObjectType)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.blocked(this, Some(Some(by)), sourceInfo)
+  final def blocked(by: IdRef)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.blocked(this, Some(Some(by.handle)), sourceInfo)
+  final def blocked(by: EventTrace.syntax.Absent.type)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.blocked(this, Some(None), sourceInfo)
 
   /** This object's ID: compare it in a query, or capture it as an event field, as in `"blocker" := blocker.id`. */
   final def id: IdRef = new IdRef(this)
@@ -75,6 +111,13 @@ abstract class ObjectType(val typeName: String) {
   protected def const[T <: ObjectType](gen: IdOf[T])(implicit name: sourcecode.Name, sourceInfo: SourceInfo): IdField[T] =
     declare(new IdField[T](this, name.value, EventTrace.idTypeOf(gen.typeName, name.value, sourceInfo), FieldProperty.Const))
 
+  /** A `const` field holding the ID of the object this one came from, of `gen`'s type, such as an instruction's fetch
+    * packet. A type has at most one.
+    */
+  protected def parent[T <: ObjectType](gen: T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): IdField[T] =
+    declare(new IdField[T](this, name.value, EventTrace.idTypeOf(gen.typeName, name.value, sourceInfo), FieldProperty.Const,
+      Some(FieldRole.Parent)))
+
   /** The type of a field holding the ID of an object of `gen`'s type, which an instance names, as for a collection. */
   protected def Id[T <: ObjectType](gen: T): IdOf[T] = new IdOf[T](gen.typeName)
 
@@ -97,7 +140,8 @@ sealed abstract class ObjectField(
   private[eventtrace] val owner:    ObjectType,
   val name:                         String,
   private[eventtrace] val tpe:      FieldType,
-  private[eventtrace] val property: FieldProperty)
+  private[eventtrace] val property: FieldProperty,
+  private[eventtrace] val role:     Option[FieldRole] = None)
     extends Key {
 
   private[eventtrace] def operand: Operand = Operand.Field(owner, this)
@@ -166,8 +210,13 @@ final class IdOf[T <: ObjectType] private[eventtrace] (private[eventtrace] val t
 /** A `const` field holding the ID of an object of type `T`. The create block assigns it a handle of that type, as in
   * `inst.fetch := packet`; queries cannot compare it yet.
   */
-final class IdField[T <: ObjectType] private[eventtrace] (owner: ObjectType, name: String, tpe: FieldType, property: FieldProperty)
-    extends ObjectField(owner, name, tpe, property) {
+final class IdField[T <: ObjectType] private[eventtrace] (
+  owner:    ObjectType,
+  name:     String,
+  tpe:      FieldType,
+  property: FieldProperty,
+  role:     Option[FieldRole] = None)
+    extends ObjectField(owner, name, tpe, property, role) {
   def :=(handle: T)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignId(this, handle, sourceInfo)
   def :=(id: IdRef)(implicit sourceInfo: SourceInfo): Unit = EventTrace.assignId(this, id.handle, sourceInfo)
 }

@@ -46,7 +46,6 @@ JSON: either one view, or a list of views, one per object type, in the order the
     "tracks": "stage",
     "label": "pc",
     "hide": ["use"],
-    "normal_end": "use",
     "created_in": {"lookup": "S1"}
   },
   {
@@ -54,9 +53,7 @@ JSON: either one view, or a list of views, one per object type, in the order the
     "tracks": "stage",
     "label": "pc",
     "hide": ["retire"],
-    "normal_end": "retire",
     "disassemble": {"bits": "bits", "pc": "pc", "isa": "rv64gc"},
-    "parent": "fetch",
     "created_in": {"decode": "Decode"}
   }
 ]
@@ -68,12 +65,13 @@ JSON: either one view, or a list of views, one per object type, in the order the
 | `tracks` | The field whose value is the object's stage, or in Perfetto its track. An enum field's stages follow the order of its variants. |
 | `label` | Optional. The field, or list of fields, that labels each object. By default, Perfetto labels an object by its ID. |
 | `hide` | Optional. In Perfetto, the object's events that are neither marked nor draw arrows. |
-| `normal_end` | Optional. In a waterfall, the event that ends an object normally, such as `retire`. An object ended by any other event is drawn as ending abnormally. Without it, every end is normal. |
 | `disassemble` | Optional. The fields that hold a RISC-V instruction and its PC, and the core's ISA string, of which only XLEN and the C extension change decoding. Each object's label is followed by the instruction, written as `objdump -M no-aliases` writes it, with a PC-relative target made absolute. |
-| `parent` | Optional. An Id field, set by the object's create event, naming the object it came from, of a type the file also draws. In a waterfall, an object's row follows its parent's. |
 | `created_in` | Optional. For each create event of the object, the stage it is in during the cycle the event fires, as in `{"decode": "Decode"}`. A stage set at cycle c holds from c+1, so without this, an object's first cycle is drawn in no stage. |
 
 `reader/rocket/`, `reader/saturn/`, and `reader/sodor/` hold the views of the traced designs.
+
+What an object's end means, which field names its parent, and which events find it blocked are not in the view: they
+come from the manifest, as the annotations declared them with `complete` or `abort`, `parent`, and `blocked`.
 
 ## Perfetto
 

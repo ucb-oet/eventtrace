@@ -9,7 +9,7 @@ import chisel3.experimental.{BaseModule, SourceInfo}
   * val active = EventTrace.collection(new Instruction)
   * when (retire) {
   *   val i = active.head
-  *   i.event("retire") { active.remove(i); i.destroy() }
+  *   i.event("retire") { active.remove(i); i.complete() }
   * }
   * }}}
   *

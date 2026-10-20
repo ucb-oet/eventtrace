@@ -21,7 +21,7 @@ import scala.util.DynamicVariable
   * }
   * when (retire) {
   *   val i = active.head
-  *   i.event("retire") { active.remove(i); i.destroy() }
+  *   i.event("retire") { active.remove(i); i.complete() }
   * }
   * }}}
   *
@@ -57,13 +57,20 @@ object EventTrace {
   private case class Ref(handle: ObjectType) extends Value
 
   /** One field written in the open event: an event-local capture, or an assignment to the subject's `field`. An
-    * event-local `Absent` has no type until generation.
+    * event-local `Absent` has no type until generation. `role` is set for the `by` field of `abort` or `blocked`.
     */
-  private case class Entry(name: String, value: Value, tpe: Option[FieldType], field: Option[ObjectField]) {
+  private case class Entry(
+    name:  String,
+    value: Value,
+    tpe:   Option[FieldType],
+    field: Option[ObjectField],
+    role:  Option[FieldRole] = None) {
     def objectField: Boolean = field.isDefined
   }
 
-  /** The event whose body is running, with the module and `when` depth in which it opened. */
+  /** The event whose body is running, with the module and `when` depth in which it opened; how it ends its subject,
+    * `Some(true)` for `complete`; and whether it finds its subject blocked.
+    */
   private case class OpenEvent(
     name:      String,
     subject:   Option[ObjectType],
@@ -71,7 +78,9 @@ object EventTrace {
     module:    BaseModule,
     whenDepth: Int,
     entries:   mutable.ArrayBuffer[Entry],
-    effects:   mutable.ArrayBuffer[Effect])
+    effects:   mutable.ArrayBuffer[Effect],
+    var ends:  Option[Boolean] = None,
+    var blocks: Boolean = false)
 
   private val openEvent = new DynamicVariable[Option[OpenEvent]](None)
 
@@ -210,9 +219,9 @@ object EventTrace {
     *   val writeback = active.where(_.stage === Stage.Writeback)
     *   EventTrace.test(writeback.size === 1) {
     *     val by = writeback.only
-    *     younger.iter { i => i.event("flush") { "by" := by; active.remove(i); i.destroy() } }
+    *     younger.iter { i => i.event("flush") { active.remove(i); i.abort(by = by) } }
     *   }.otherwise {
-    *     younger.iter { i => i.event("flush") { "by" := Absent; active.remove(i); i.destroy() } }
+    *     younger.iter { i => i.event("flush") { active.remove(i); i.abort(by = Absent) } }
     *   }
     * }
     * }}}
@@ -336,7 +345,8 @@ object EventTrace {
     val open = OpenEvent(name, subject, created, module, WhenDepth(), mutable.ArrayBuffer.empty, mutable.ArrayBuffer.empty)
     openEvent.withValue(Some(open))(body)
     val entries = open.entries
-    val lifecycle = if (created) Some("create") else if (open.effects.contains(Effect.Destroy)) Some("destroy") else None
+    val lifecycle =
+      if (created) Some("create") else open.ends.map(normal => if (normal) "complete" else "abort")
 
     if (created) subject.foreach { handle =>
       val missing = handle.fields.filter(_.property == FieldProperty.Const).map(_.name).filterNot { field =>
@@ -351,13 +361,13 @@ object EventTrace {
 
     // Transmitted fields are laid out in declaration order, starting at the least significant bit, followed by the
     // hardware values the site's queries and tests compare with.
-    val refs = entries.collect { case Entry(_, Ref(handle), _, _) => handle }
+    val refs = entries.collect { case Entry(_, Ref(handle), _, _, _) => handle }
     val tested = guards.map(_.test.view)
     val resolved = Option.when(subject.isDefined || refs.nonEmpty || guards.nonEmpty)(
       handles(what, open, subject.toSeq ++ refs ++ tested.flatMap(Queries.handles), tested, sourceInfo)
     )
     val queryValues = resolved.toSeq.flatMap(_._2)
-    val packed = entries.collect { case Entry(field, Hardware(value), Some(t), _) => (field, value, t.width) }
+    val packed = entries.collect { case Entry(field, Hardware(value), Some(t), _, _) => (field, value, t.width) }
     val offsets = packed.map(_._1).zip(packed.scanLeft(0)(_ + _._3)).toMap
     val operandOffsets = queryValues.zip(queryValues.scanLeft(packed.map(_._3).sum)(_ + _.tpe.width))
     val payloadBits = packed.map(_._3).sum + queryValues.map(_.tpe.width).sum
@@ -369,7 +379,7 @@ object EventTrace {
         case Unset          => Omitted
         case Ref(handle)    => Reference(handle)
       }
-      FieldLayout(e.name, e.tpe, source)
+      FieldLayout(e.name, e.tpe, source, e.role)
     }
     checkNamesakes(what, name, lifecycle, fields, sourceInfo)
 
@@ -378,7 +388,7 @@ object EventTrace {
         subject.map(s => handlePlans.find(_.handle eq s).get),
         handlePlans,
         operandOffsets,
-        entries.toSeq.collect { case Entry(_, value, _, Some(field)) if value != Unset => field },
+        entries.toSeq.collect { case Entry(_, value, _, Some(field), _) if value != Unset => field },
         open.effects.toSeq,
         guards
       )
@@ -395,8 +405,8 @@ object EventTrace {
       d.carried = true
       carryFiles(sink, d)
     }
-    siteLayouts += SiteLayout(siteId, written, subject.map(_.typeName), lifecycle, location(sourceInfo), fields, payloadWords,
-      module, plan)
+    siteLayouts += SiteLayout(siteId, written, subject.map(_.typeName), lifecycle, open.blocks, location(sourceInfo), fields,
+      payloadWords, module, plan)
   }
 
   /** Every handle a site resolves, starting from its subject, the handles whose IDs it captures, and the handles its
@@ -446,8 +456,9 @@ object EventTrace {
       elaborationError(s"$what uses an object that no create block or query produced", sourceInfo)
   }
 
-  private def addCapture(name: String, sourceInfo: SourceInfo)(entry: String => Entry): Unit = {
-    val what = s"""capture("$name")"""
+  /** Adds the event field `name`; `described` names the call in errors, `capture("name")` by default. */
+  private def addCapture(name: String, sourceInfo: SourceInfo, described: String = "")(entry: String => Entry): Unit = {
+    val what = if (described.nonEmpty) described else s"""capture("$name")"""
     val open = openEvent.value.getOrElse(elaborationError(s"$what is outside an EventTrace.event block", sourceInfo))
     checkScope(what, open, sourceInfo)
     CppGen.identifierError(name).foreach(reason => elaborationError(s"$what: $reason", sourceInfo))
@@ -514,16 +525,43 @@ object EventTrace {
     subjectEvent(what, handle, sourceInfo).effects += effect
   }
 
-  /** Records the destruction of the open event's subject. */
-  private[eventtrace] def destroy(handle: ObjectType, sourceInfo: SourceInfo): Unit = {
-    val what = s"${handle.typeName}.destroy()"
+  /** Records the end of the open event's subject, normal for `complete` and abnormal for `abort`, and the `by` field
+    * of `abort(by = ...)`: `Some(None)` for `Absent`.
+    */
+  private[eventtrace] def end(handle: ObjectType, normal: Boolean, by: Option[Option[ObjectType]], sourceInfo: SourceInfo)
+    : Unit = if (tracing) {
+    val what = s"${handle.typeName}.${if (normal) "complete" else "abort"}()"
     checkHandle(what, handle, sourceInfo)
     val open = subjectEvent(what, handle, sourceInfo)
     if (open.created)
-      elaborationError(s"$what is in its subject's create block; no event both creates and destroys its subject", sourceInfo)
-    if (open.effects.contains(Effect.Destroy)) elaborationError(s"$what destroys the subject a second time", sourceInfo)
+      elaborationError(s"$what is in its subject's create block; no event both creates and ends its subject", sourceInfo)
+    if (open.effects.contains(Effect.Destroy)) elaborationError(s"$what ends the subject a second time", sourceInfo)
     open.effects += Effect.Destroy
+    open.ends = Some(normal)
+    by.foreach(addBy(what, _, FieldRole.AbortedBy, sourceInfo))
   }
+
+  /** Records that the open event finds its subject blocked, and the `by` field of `blocked(by = ...)`. */
+  private[eventtrace] def blocked(handle: ObjectType, by: Option[Option[ObjectType]], sourceInfo: SourceInfo): Unit =
+    if (tracing) {
+      val what = s"${handle.typeName}.blocked()"
+      checkHandle(what, handle, sourceInfo)
+      val open = subjectEvent(what, handle, sourceInfo)
+      if (open.blocks) elaborationError(s"$what says a second time that the subject is blocked", sourceInfo)
+      open.blocks = true
+      by.foreach(addBy(what, _, FieldRole.BlockedBy, sourceInfo))
+    }
+
+  /** Captures the field `by`, naming the object that aborted or blocks the subject, or `Absent` for `None`. */
+  private def addBy(what: String, by: Option[ObjectType], role: FieldRole, sourceInfo: SourceInfo): Unit =
+    addCapture("by", sourceInfo, s"$what's by") { w =>
+      by match {
+        case Some(handle) =>
+          checkHandle(w, handle, sourceInfo)
+          Entry("by", Ref(handle), Some(FieldType.id(handle.typeName)), None, Some(role))
+        case None => Entry("by", Unset, None, None, Some(role))
+      }
+    }
 
   /** The open event, if `handle` is its subject: every effect acts on its event's subject. */
   private def subjectEvent(what: String, handle: ObjectType, sourceInfo: SourceInfo): OpenEvent = {
@@ -637,7 +675,7 @@ object EventTrace {
     */
   private def registerObjectType(handle: ObjectType, sourceInfo: SourceInfo): Unit = {
     val name = handle.typeName
-    val signature = handle.fields.map(f => s"${f.name}: ${f.tpe.typeName} ${f.property}")
+    val signature = handle.fields.map(f => s"${f.name}: ${f.tpe.typeName} ${f.property}${f.role.fold("")(r => s" ${r.written}")}")
     objectTypes.get(name) match {
       case Some(known) if known.signature == signature =>
       case Some(known) =>
@@ -658,6 +696,9 @@ object EventTrace {
             sourceInfo
           )
         }
+        val parents = handle.fields.filter(_.role.contains(FieldRole.Parent)).map(_.name)
+        if (parents.length > 1)
+          elaborationError(s"object type $name declares parents ${parents.mkString(", ")}; a type has at most one", sourceInfo)
         if (handle.fields.length > MaxObjectFields)
           elaborationError(
             s"object type $name declares ${handle.fields.length} fields; an object type has at most $MaxObjectFields",
@@ -690,8 +731,9 @@ object EventTrace {
   }
 
   /** Sites sharing a name are one event to consumers. They must declare the same fields, in any order, with the
-    * same types where both declare one, since an event-local `Absent` has none; and agree on creating and on
-    * destroying the subject.
+    * same types where both declare one, since an event-local `Absent` has none; give a field the same role, where
+    * one declares a role and the other declares one too or gives the field a value; and agree on creating, completing,
+    * or aborting the subject. A site that leaves a field `Absent` without a role, as a plain capture, gives it none.
     */
   private def checkNamesakes(
     what:       String,
@@ -711,10 +753,27 @@ object EventTrace {
             s"${signature(other.fields)}; sites sharing an event name must declare exactly the same fields",
           sourceInfo
         )
+      def role(f: FieldLayout) = f.role.map(_.written).getOrElse("no role")
+      fields.foreach { f =>
+        other.fields.find(_.name == f.name).foreach { o =>
+          val disagree = (f.role, o.role) match {
+            case (Some(a), Some(b)) => a != b
+            case (Some(_), None)    => o.source != Omitted
+            case (None, Some(_))    => f.source != Omitted
+            case (None, None)       => false
+          }
+          if (disagree)
+            elaborationError(
+              s"$what gives field ${f.name} ${role(f)}, but the site with the same name at ${other.location} gives it " +
+                s"${role(o)}; sites sharing an event name must give a field the same role",
+              sourceInfo
+            )
+        }
+      }
       if (lifecycle != other.lifecycle)
         elaborationError(
-          s"$what and the site with the same name at ${other.location} disagree on creating or destroying their " +
-            "subject; sites sharing an event name must agree on lifecycle",
+          s"$what and the site with the same name at ${other.location} disagree on creating, completing, or aborting " +
+            "their subject; sites sharing an event name must agree on lifecycle",
           sourceInfo
         )
     }
