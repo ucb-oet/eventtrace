@@ -1,5 +1,5 @@
 // A copy of illilouette's proto/waterfall.proto, which illilouette owns: the format of the files that
-// `eventtrace waterfall` writes for its viewer. Copied from illilouette's commit ce2a30c. illilouette keeps its
+// `eventtrace waterfall` writes for its viewer. Copied from illilouette's commit 13c5a1d. illilouette keeps its
 // field numbers stable, so a copy that lags it still writes files the viewer reads.
 //
 // The waterfall file: what a post-processor writes from an EventTrace trace, its manifest, and the design's view
@@ -36,6 +36,8 @@ message Site {
   uint32 instance = 2;
   // The source location, such as "generators/riscv-sodor/src/main/scala/sodor/rv32_5stage/dpath.scala:395".
   uint32 source = 3;
+  // Whether events here find their object blocked: waiting, rather than making progress.
+  bool blocks = 4;
 }
 
 message Type {
@@ -107,4 +109,14 @@ message Field {
   uint32 text = 2;
   // For a field naming another object in the file: that object's row index.
   optional uint64 row = 3;
+  // For a field naming another object: what that object is to this one.
+  Role role = 4;
+}
+
+// What a field naming another object means.
+enum Role {
+  ROLE_NONE = 0;        // any other field
+  ROLE_PARENT = 1;      // the object this one came from, such as an instruction's fetch packet
+  ROLE_ABORTED_BY = 2;  // the object that aborted it, such as the branch that squashed it
+  ROLE_BLOCKED_BY = 3;  // the object it is blocked by, such as the instruction it waits on
 }

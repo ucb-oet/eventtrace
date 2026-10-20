@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
-use eventtrace::manifest::{FieldSchema, FieldType, Lifecycle, Property};
+use eventtrace::manifest::{FieldSchema, FieldType, Lifecycle, Property, Role};
 use eventtrace::objects::Key;
 use eventtrace::text;
 use eventtrace::{Error, Event, Events, Manifest, Result, Value};
@@ -34,6 +34,17 @@ mod pb {
 }
 
 use pb::event::Effect;
+
+/// What a field naming another object means to the viewer: the role the manifest gives an event's `by` field, or, for
+/// the object's parent field in its create event, its parent.
+fn role_of(field: &FieldSchema, is_parent: bool) -> pb::Role {
+    match field.role {
+        Some(Role::AbortedBy) => pb::Role::AbortedBy,
+        Some(Role::BlockedBy) => pb::Role::BlockedBy,
+        _ if is_parent => pb::Role::Parent,
+        _ => pb::Role::None,
+    }
+}
 
 const FORMAT_VERSION: u32 = 1;
 
@@ -122,7 +133,7 @@ fn convert<W: Write>(
         let event = texts.get(&site.event_name);
         let instance = texts.get(&site.instance);
         let source = texts.get(&site.source);
-        file.sites.push(pb::Site { event, instance, source });
+        file.sites.push(pb::Site { event, instance, source, blocks: site.blocks });
     }
     let mut drawn: IndexMap<&str, Drawn> = IndexMap::new();
     for (index, view) in views.iter().enumerate() {
@@ -209,13 +220,15 @@ fn convert<W: Write>(
             event.effect = Some(Effect::Observes(true));
         }
         let fields: Vec<(&FieldSchema, Value)> = e.present_fields(manifest).collect();
+        let parent_field = manifest.object(&d.view.object).and_then(|o| o.parent()).map(|f| f.name.as_str());
         for &(field, value) in &fields {
             if field.name == track && !lifecycle.is_some_and(Lifecycle::ends) {
                 continue;
             }
             let name_text = texts.get(&field.name);
             let value_text = texts.get(&text_of(field, value));
-            event.fields.push(pb::Field { name: name_text, text: value_text, row: None });
+            let role = role_of(field, lifecycle == Some(Lifecycle::Create) && parent_field == Some(field.name.as_str()));
+            event.fields.push(pb::Field { name: name_text, text: value_text, row: None, role: role as i32 });
             if let (FieldType::Id, Some(object_type), Some(id)) = (field.ty, &field.object, value.unsigned()) {
                 refs.push((key, row.events.len(), event.fields.len() - 1, Key { object_type, id }));
             }
@@ -223,8 +236,8 @@ fn convert<W: Write>(
         origin.known.extend(fields.iter().map(|&(field, value)| (field.name.as_str(), (field, value))));
         if lifecycle == Some(Lifecycle::Create) {
             origin.created = Some(order);
-            if let Some(parent) = manifest.object(&d.view.object).and_then(|o| o.parent()).map(|f| &f.name) {
-                origin.parent = fields.iter().find(|(f, _)| &f.name == parent).and_then(|&(field, value)| {
+            if let Some(parent) = parent_field {
+                origin.parent = fields.iter().find(|(f, _)| f.name == parent).and_then(|&(field, value)| {
                     Some(Key { object_type: field.object.as_deref()?, id: value.unsigned()? })
                 });
             }
@@ -232,7 +245,7 @@ fn convert<W: Write>(
             for &(field, value) in fields.iter().filter(|(f, _)| shown(&f.name)) {
                 let name_text = texts.get(&field.name);
                 let value_text = texts.get(&text_of(field, value));
-                row.fields.push(pb::Field { name: name_text, text: value_text, row: None });
+                row.fields.push(pb::Field { name: name_text, text: value_text, ..Default::default() });
             }
         }
         row.events.push(event);
