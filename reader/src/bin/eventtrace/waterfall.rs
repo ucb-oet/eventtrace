@@ -173,6 +173,9 @@ fn convert<W: Write>(
         let name = texts.get(object);
         let stages = stage_values.iter().map(|&v| texts.get(&text::value(manifest, track_type, v).to_string())).collect();
         file.types.push(pb::Type { name, stages });
+        if view.focus {
+            file.focus = index as u32;
+        }
         let dasm = view.disassemble.as_ref().map(|d| Disassembler::new(&d.isa)).transpose()?;
         let consts = manifest.object(object).map(|o| {
             let consts = o.fields.iter().filter(|f| f.property == Some(Property::Const));

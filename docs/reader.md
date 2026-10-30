@@ -50,6 +50,7 @@ JSON: either one view, or a list of views, one per object type, in the order the
   },
   {
     "object": "instruction",
+    "focus": true,
     "tracks": "stage",
     "label": "pc",
     "hide": ["retire"],
@@ -67,6 +68,7 @@ JSON: either one view, or a list of views, one per object type, in the order the
 | `hide` | Optional. In Perfetto, the object's events that are neither marked nor draw arrows. |
 | `disassemble` | Optional. The fields that hold a RISC-V instruction and its PC, and the core's ISA string, of which only XLEN and the C extension change decoding. Each object's label is followed by the instruction, written as `objdump -M no-aliases` writes it, with a PC-relative target made absolute. |
 | `created_in` | Optional. For each create event of the object, the stage it is in during the cycle the event fires, as in `{"decode": "Decode"}`. A stage set at cycle c holds from c+1, so without this, an object's first cycle is drawn in no stage. |
+| `focus` | Optional. `true` for the object type in focus when a waterfall file opens, drawn in full; at most one view may set it. Without it, the first type is in focus. |
 
 `reader/rocket/`, `reader/saturn/`, and `reader/sodor/` hold the views of the traced designs.
 
