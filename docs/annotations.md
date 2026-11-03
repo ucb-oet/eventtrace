@@ -253,6 +253,7 @@ the size of the tag space: 32 for 16 entries tagged with a wrap bit, or `entries
   members from `newTail` through the youngest leave, and allocation continues from `newTail`. `newTail` may also be
   the key the tail allocates next, which removes nothing. Its block works as `clear`'s does.
 - `pop()` and `clear` work as on a queue.
+- A reset in the middle of a run does not restart allocation, so the next `add` after it is a violation.
 
 ```scala
 val rob = EventTrace.rob(new Insn, entries = 8, keys = 16)
