@@ -155,6 +155,9 @@ class Runtime {
   // earlier cycles are already out, and continuing would need a guess about which effect wins.
   [[noreturn]] void violation(unsigned site, const char* format, ...) const;
 
+  // Stops the run with a message, after writing out the records of earlier cycles.
+  [[noreturn]] void fail(const char* format, ...) const;
+
  private:
   struct Record {
     unsigned site;
@@ -164,7 +167,6 @@ class Runtime {
   void flush();
   Trigger parse_trigger(const char* plusarg, const char* spec) const;
   void watch();
-  [[noreturn]] void fail(const char* format, ...) const;
 
   Sites& sites_;
   std::FILE* out_ = nullptr;  // null until open()

@@ -34,6 +34,13 @@ struct Object {
   uint64_t assigned = 0;              // the fields assigned, one bit each
 };
 
+// An object's type name in messages: a generated object type's kTypeName. Another kind of object, such as the C++
+// library's, gives its own through an overload that argument-dependent lookup finds.
+template <class T>
+auto type_name(const T&) -> decltype(T::kTypeName) {
+  return T::kTypeName;
+}
+
 // The live objects of one type, by ID.
 template <class T>
 class Store {
@@ -107,9 +114,9 @@ class Effects {
               bool set_once_taken, std::function<void()> write) {
     touch(rt, site, event, o);
     if (set_once_taken)
-      rt.violation(site, "%s#%llu.%s is setOnce and was assigned in an earlier cycle", T::kTypeName, o.id, field);
+      rt.violation(site, "%s#%llu.%s is setOnce and was assigned in an earlier cycle", type_name(o), o.id, field);
     if (o.assigned & (uint64_t(1) << bit))
-      rt.violation(site, "%s#%llu.%s is assigned twice in one cycle, also by site %u (%s)", T::kTypeName, o.id, field,
+      rt.violation(site, "%s#%llu.%s is assigned twice in one cycle, also by site %u (%s)", type_name(o), o.id, field,
                    o.earlier_site, rt.site_name(o.earlier_site));
     o.assigned |= uint64_t(1) << bit;
     writes_.push_back(std::move(write));
@@ -118,18 +125,18 @@ class Effects {
   template <class T>
   void add(Runtime& rt, unsigned site, unsigned long long event, Collection<T>& c, T& o) {
     touch(rt, site, event, o);
-    if (member(o, c)) rt.violation(site, "%s#%llu is already a member of %s", T::kTypeName, o.id, c.name());
+    if (member(o, c)) rt.violation(site, "%s#%llu is already a member of %s", type_name(o), o.id, c.name());
     if (std::find(c.adds_.begin(), c.adds_.end(), &o) != c.adds_.end())
-      rt.violation(site, "%s#%llu is added to %s twice in one cycle", T::kTypeName, o.id, c.name());
+      rt.violation(site, "%s#%llu is added to %s twice in one cycle", type_name(o), o.id, c.name());
     c.adds_.push_back(&o);
   }
 
   template <class T>
   void remove(Runtime& rt, unsigned site, unsigned long long event, Collection<T>& c, T& o) {
     touch(rt, site, event, o);
-    if (!member(o, c)) rt.violation(site, "%s#%llu is not a member of %s", T::kTypeName, o.id, c.name());
+    if (!member(o, c)) rt.violation(site, "%s#%llu is not a member of %s", type_name(o), o.id, c.name());
     if (std::find(c.removes_.begin(), c.removes_.end(), &o) != c.removes_.end())
-      rt.violation(site, "%s#%llu is removed from %s twice in one cycle", T::kTypeName, o.id, c.name());
+      rt.violation(site, "%s#%llu is removed from %s twice in one cycle", type_name(o), o.id, c.name());
     c.removes_.push_back(&o);
   }
 
@@ -138,10 +145,10 @@ class Effects {
     touch(rt, site, event, o);
     if (o.several)
       rt.violation(site, "%s#%llu is destroyed, but site %u (%s) also has an effect on it in this cycle",
-                   T::kTypeName, o.id, o.earlier_site, rt.site_name(o.earlier_site));
+                   type_name(o), o.id, o.earlier_site, rt.site_name(o.earlier_site));
     o.destroyed = true;
     o.destroy_site = site;
-    destroys_.push_back({site, &o, T::kTypeName, [&store, id = o.id] { store.erase(id); }});
+    destroys_.push_back({site, &o, type_name(o), [&store, id = o.id] { store.erase(id); }});
   }
 
   // Applies the cycle's effects: field writes, then membership changes, then destruction, which requires the
@@ -181,7 +188,7 @@ class Effects {
     }
     if (event == o.last_event) return;
     if (o.destroyed)
-      rt.violation(site, "%s#%llu has an effect here, but site %u (%s) destroys it in this cycle", T::kTypeName, o.id,
+      rt.violation(site, "%s#%llu has an effect here, but site %u (%s) destroys it in this cycle", type_name(o), o.id,
                    o.destroy_site, rt.site_name(o.destroy_site));
     o.several = true;
     o.earlier_site = o.last_site;
