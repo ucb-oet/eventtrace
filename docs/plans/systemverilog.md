@@ -69,9 +69,9 @@ The library lives in `runtime/`, beside the runtime it extends. It declares:
 - object types, as structs deriving from `oet::Object` whose fields are `oet::Const<T>`, `oet::SetOnce<T>`,
   `oet::Mutable<T>` or `oet::Parent<T>`, registered with `OET_OBJECT`;
 - collections, as `oet::Collection<T>`;
-- events, as `oet::Event<T>`, with a name, a subject type, a lifecycle (`oet::create`, `oet::complete`,
-  `oet::abort`, or `oet::abort<T>` when a record may name the object of type `T` that aborted it), and the fields
-  its records carry;
+- events, as `oet::Event<T>`, with a name, a subject type, a lifecycle (`oet::create`, `oet::complete`, or
+  `oet::abort`), the fields its records carry, and, as `oet::by<T>`, the type of the object a record may name as
+  what blocks or aborted its subject;
 - calls, as `oet::Call`, each with a name, an optional count of indices, and the events its handler emits.
 
 Collections and queries keep the Chisel frontend's operations: `where`, ordering, `head`, `last`, `at`, `only`,
@@ -92,7 +92,7 @@ struct DecodeValues { std::optional<StallCause> stall; };   // values beyond the
 OET_FIELDS(DecodeValues, stall)
 
 oet::Event<Instruction, DecodeValues> decode{"decode", oet::create,
-    &Instruction::pc, &Instruction::bits, &Instruction::stage, oet::may_block<Instruction>};
+    &Instruction::pc, &Instruction::bits, &Instruction::stage, oet::by<Instruction>};
 
 decode.emit(i);                                       // stall absent
 decode.emit(i, {.stall = cause}, oet::blocked(b));    // stall present
@@ -110,7 +110,8 @@ decode.emit(i, {.stall = cause}, oet::blocked(b));    // stall present
 A DPI function queues its handler with `oet::at(cycle, call[index], handler)`. One handler may emit several events,
 so a call is not a site:
 
-- The library makes one site per (call, index, event), numbered in declaration order.
+- The library makes the sites of each (call, index, event), numbered in declaration order: two for an event with a
+  subject, as [Blocking and causes](#blocking-and-causes) explains, and one otherwise.
 - Inside a handler, `event.emit(subject)` picks the site of the running call and index.
 - Emitting an event that the running call did not declare stops the run.
 - Sites of one event share its `oet::Event`, so they agree on its fields and lifecycle by construction.
@@ -122,15 +123,15 @@ oet::Event<VInsn> dispatch{"dispatch", oet::create, &VInsn::vseq, &VInsn::pc};
 oet::Event<VInsn> kill    {"kill",     oet::abort};
 oet::Event<VUop>  uop_kill{"kill",     oet::abort};
 
-oet::Call vdisp_call{"vdisp", 2, {dispatch}};           // sites 0, 1
-oet::Call vkill_call{"vkill",    {kill, uop_kill}};     // sites 2, 3
+oet::Call vdisp_call{"vdisp", 2, {dispatch}};           // a dispatch site per slot
+oet::Call vkill_call{"vkill",    {kill, uop_kill}};
 
 void oet_vdisp(long long cycle, int slot, unsigned vseq, unsigned long long pc) {
     oet::at(cycle, vdisp_call[slot], [=] {
         VInsn& i = dispatch.create();
         i.vseq = vseq; i.pc = pc;
         vinsns.add(i);
-        dispatch.emit(i);                               // site 0 or 1, by slot
+        dispatch.emit(i);                               // the site of this slot
     });
 }
 ```
@@ -138,28 +139,28 @@ void oet_vdisp(long long cycle, int slot, unsigned vseq, unsigned long long pc) 
 ### Blocking and causes
 
 Whether a record is blocked, and by what, is chosen per record at `emit`. The declaration says only what the manifest
-needs up front: whether the event may block, and which object type a cause can be.
+needs up front: with `oet::by<T>`, the type of the object a record may name as its cause.
 
 ```cpp
-oet::Event<Instruction> decode{"decode", oet::create, &Instruction::pc, &Instruction::stage,
-                               oet::may_block<Instruction>};
-oet::Event<Instruction> squash{"squash", oet::abort<Instruction>};
+oet::Event<Instruction> decode{"decode", oet::create, &Instruction::pc, &Instruction::stage, oet::by<Instruction>};
+oet::Event<Instruction> squash{"squash", oet::abort, oet::by<Instruction>};
+oet::Event<Fetch>       miss  {"miss"};
 
 decode.emit(i);                          // not blocked
 decode.emit(i, oet::blocked(b));         // blocked by b
 decode.emit(i, oet::blocked());          // blocked, cause unknown
 squash.emit(i, oet::by(br));             // aborted by br
+miss.emit(f, oet::blocked());            // no cause type declared, so blocked() only
 ```
 
 The library maps this onto today's formats, which do not change:
 
-- Each (call, index, event) that may block gets two sites, one with `"blocks": true` and one without, and `emit` picks
+- Each (call, index, event) with a subject gets two sites, one with `"blocks": true` and one without, and `emit` picks
   the right one.
-- The manifest's `by` field, its `optional` flag, and its role (`blocked_by` or `aborted_by`) come from the
-  declaration. A record with no cause leaves `by` absent.
+- An event declared with `oet::by<T>` has a field `by`, an `Id` of `T`, always `optional`. Its role is `aborted_by`
+  for an `abort` event and `blocked_by` otherwise. A record that names no cause leaves it absent.
+- An `abort` event emitted as blocked stops the run.
 - `by` is not a field in the C++ API.
-
-This reproduces what Rocket's `instruction.decode` does today with one site that issues and three that block.
 
 ### Handler rules
 
@@ -198,6 +199,9 @@ These follow the Chisel frontend's rules.
 4. A query's error message cannot show its predicate's text, since a lambda is opaque.
 5. A traced design has two files, tied together by DPI function names. A missing definition fails at link time, and a
    wrong signature fails at compile time when the C++ includes Verilator's DPI header.
+6. The manifest marks `by` optional even where every record names a cause, which nothing reads today. Every event
+   with a subject has a blocking site, which never fires for an event that never blocks, so the C++ flow's site IDs
+   differ from Chisel's.
 
 ## The manifest
 
@@ -232,7 +236,7 @@ A new page, "Annotating SystemVerilog", beside `docs/annotations.md`.
 ## Tests
 
 - SystemVerilog and C++ versions of the `stage0`, `stage1`, `objects` and `collections` examples, checked by their
-  existing `check.awk`.
+  `check.awk`, adjusted where the C++ flow's site IDs and its optional `by` differ from Chisel's.
 - A version of the collections example's `Misuse` for the runtime's violations.
 - C++ cases for the startup checks, where they replace the `Rejects` cases. Checks that become compile errors are not
   tested.
