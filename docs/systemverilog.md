@@ -273,6 +273,12 @@ Each (call, index, event) has its own site, numbered in the order the calls are 
 two: one that does not block, and after it one that does, which `emit` picks for a blocked record. So site IDs differ
 from a Chisel build of the same design, and an event that never blocks has a blocking site that never fires.
 
+Within one file, the calls are declared top to bottom. Across files, C++ leaves the order unspecified, and in practice
+it follows the order the files are linked. So a design whose calls are spread over several files may number its sites,
+and order a cycle's handlers, differently from one build to the next. Each trace still reads correctly with the
+manifest written beside it. To keep the numbering the same across builds, keep all the calls in one file. Failing that,
+keep every call that creates objects of one type in the same file, so that the type's object IDs stay the same.
+
 ## The manifest
 
 When the trace opens, the library checks the declarations and writes the manifest beside the trace, as
