@@ -1,3 +1,5 @@
+/* The EventTrace object: the annotation API that designs call, and the elaboration that turns their blocks into
+ * sites, sinks, the manifest, and the generated C++. */
 package eventtrace
 
 import chisel3._
@@ -116,8 +118,18 @@ object EventTrace {
 
     val collections = mutable.ArrayBuffer.empty[CollectionInfo]
 
+    /** Every handle that `pop` returned, in order; see [[popping]]. */
+    val pops = mutable.ArrayBuffer.empty[PendingPop]
+
     /** Whether a sink carries the generated files yet; see [[carryFiles]]. */
     var carried = false
+  }
+
+  /** A handle that `what`, a queue's or ROB's `pop`, returned: the one event declared on it carries its removal from
+    * `info`, and `carrier` is that event's location once it is declared.
+    */
+  private class PendingPop(val handle: ObjectType, val info: CollectionInfo, val what: String, val sourceInfo: SourceInfo) {
+    var carrier: Option[String] = None
   }
 
   private var latest: Option[Declarations] = None
@@ -265,6 +277,17 @@ object EventTrace {
       )
   }
 
+  /** Records that `handle`, which `what` returned, leaves the head of `info` with the one event declared on it. */
+  private[eventtrace] def popping(handle: ObjectType, info: CollectionInfo, what: String, sourceInfo: SourceInfo): Unit =
+    if (tracing) {
+      if (openEvent.value.isDefined)
+        elaborationError(
+          s"$what is inside an event block; call it outside, and the one event on the member it returns carries the pop",
+          sourceInfo
+        )
+      declarations.pops += new PendingPop(handle, info, what, sourceInfo)
+    }
+
   private def runIter[T <: ObjectType](what: String, view: ViewExpr, member: T, leaves: Option[CollectionInfo],
     sourceInfo: SourceInfo)(body: T => Unit): OpenIter = {
     if (openIter.value.isDefined) elaborationError(s"$what is nested inside another iter block, which is not supported", sourceInfo)
@@ -349,12 +372,18 @@ object EventTrace {
     ManifestGen.json(EventSchema.fromSites(sites), sites, latest.toSeq.flatMap(_.objectTypes.values))
   }
 
-  /** Every site of an elaboration, each event-local field left `Absent` taking its type from the other sites. */
-  private def resolvedSites(d: Declarations): Seq[SiteLayout] =
+  /** Every site of an elaboration, each event-local field left `Absent` taking its type from the other sites. A pop
+    * whose member never got an event is an error here, since an event on it may follow anywhere in elaboration.
+    */
+  private def resolvedSites(d: Declarations): Seq[SiteLayout] = {
+    d.pops.find(_.carrier.isEmpty).foreach { p =>
+      elaborationError(s"${p.what}'s member has no event, which would carry the pop; declare one event on it", p.sourceInfo)
+    }
     EventSchema.resolve(d.siteLayouts.toSeq) match {
       case Right(typed)   => typed
       case Left(untyped) => throw new IllegalArgumentException(untyped.mkString("; "))
     }
+  }
 
   /** The runtime and DPI adapter, shipped in the frontend's resources, which link to `runtime/src`. */
   private val RuntimeSources = Seq("eventtrace_runtime.h", "eventtrace_runtime.cc", "eventtrace_tracker.h", "eventtrace_dpi.cc")
@@ -415,6 +444,18 @@ object EventTrace {
     openIter.value.foreach { iter =>
       iter.leaves.foreach(info => open.effects += Effect.Drop(info))
       iter.events += 1
+    }
+    // The one event on a member that pop returned carries its removal from the head.
+    subject.flatMap(s => declarations.pops.find(_.handle eq s)).foreach { p =>
+      p.carrier.foreach { first =>
+        elaborationError(
+          s"$what is a second event on the member ${p.what} returns; the first, at $first, carries the pop, and a " +
+            "popped member takes exactly one event",
+          sourceInfo
+        )
+      }
+      p.carrier = Some(location(sourceInfo))
+      open.effects += Effect.Pop(p.info)
     }
     openEvent.withValue(Some(open))(body)
     val entries = open.entries
@@ -607,23 +648,6 @@ object EventTrace {
     checkHandle(what, handle, sourceInfo)
     subjectEvent(what, handle, sourceInfo).effects += effect
   }
-
-  /** Records `pop()` on the open event's subject, `what`, which must have the type `info` holds. */
-  private[eventtrace] def subjectEffect(made: Effect, info: CollectionInfo, what: String, sourceInfo: SourceInfo): Unit =
-    if (tracing) {
-      val open = openEvent.value.getOrElse(elaborationError(s"$what is outside an event block", sourceInfo))
-      val subject = open.subject.getOrElse(
-        elaborationError(s"""$what is in the event "${open.name}", which has no subject and so no effects""", sourceInfo)
-      )
-      if (subject.typeName != info.typeName)
-        elaborationError(
-          s"$what is in an event on an object of type ${subject.typeName}, but ${info.valName} holds ${info.typeName}",
-          sourceInfo
-        )
-      if (open.created)
-        elaborationError(s"$what is in its subject's create block, and a new object is in no queue yet", sourceInfo)
-      effect(made, subject, what, sourceInfo)
-    }
 
   /** Records the end of the open event's subject, normal for `complete` and abnormal for `abort`, and the `by` field
     * of `abort(by = ...)`: `Some(None)` for `Absent`.

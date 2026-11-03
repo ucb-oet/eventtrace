@@ -4,11 +4,7 @@ package eventtrace.examples.structures
 import chisel3._
 import circt.stage.ChiselStage
 import eventtrace.EventTrace
-
-/** An object type that none of the fixture's collections holds. */
-class Other extends EventTrace.ObjectType("other") {
-  val v = const(UInt(4.W))
-}
+import eventtrace.EventTrace.syntax._
 
 /** A design whose body runs inside one module with an 8-bit input `a`, a queue, a ROB with 4 entries and 8 keys, and
   * a map with 4 entries.
@@ -48,19 +44,22 @@ object Rejects extends App {
     ("a literal map key outside its entries", design { (_, _, _, m) =>
       m(4.U).event("r_far_slot") {}
     }, "m(key) gives key 4, but m's keys are below 4"),
-    ("pop outside an event", design { (_, q, _, _) =>
-      q.pop()
-    }, "q.pop() is outside an event block"),
-    ("pop in an event without a subject", design { (_, q, _, _) =>
-      EventTrace.event("r_bare") { q.pop() }
-    }, "q.pop() is in the event \"r_bare\", which has no subject and so no effects"),
-    ("pop in a create block", design { (_, q, _, _) =>
-      EventTrace.create(new Cell, event = "r_new") { c => c.key := 0.U; q.pop() }
-    }, "q.pop() is in its subject's create block, and a new object is in no queue yet"),
-    ("pop in an event on another type", design { (_, q, _, _) =>
-      val o = EventTrace.collection(new Other).head
-      o.event("r_other") { q.pop() }
-    }, "q.pop() is in an event on an object of type other, but q holds cell"),
+    ("a popped member without an event", design { (_, q, _, _) =>
+      val h = q.pop()
+      EventTrace.event("r_names") { "first" := h }
+    }, "q.pop()'s member has no event, which would carry the pop; declare one event on it"),
+    ("a popped member with two events", design { (_, q, _, _) =>
+      val h = q.pop()
+      h.event("r_one") {}
+      h.event("r_two") {}
+    }, "is a second event on the member q.pop() returns; the first, at"),
+    ("pop inside an event block", design { (_, q, _, _) =>
+      val h = q.head
+      h.event("r_old") { q.pop() }
+    }, "q.pop() is inside an event block; call it outside, and the one event on the member it returns carries the pop"),
+    ("pop at a negative position", design { (_, _, r, _) =>
+      r.pop(-1)
+    }, "r.pop(-1) needs a position of at least 0"),
     ("clear whose block has two events", design { (_, q, _, _) =>
       q.clear { c => c.event("r_one") {}; c.event("r_two") {} }
     }, "q.clear's block declares 2 events; it must hold exactly one event on its member"),

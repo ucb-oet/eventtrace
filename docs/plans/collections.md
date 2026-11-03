@@ -20,8 +20,8 @@ The Set is today's collection, unchanged.
 
 A **Queue** is a FIFO:
 
-- `pop()` removes the subject of the event block it is in, which must be at the head. The pops of one cycle take the
-  first members, as many as there are pops.
+- `pop()` returns the head, and the one event declared on it carries its removal. `pop(k)` returns member `k`, for
+  the `k`-th of a cycle's pops. The pops of one cycle must take the first members, as many as there are pops.
 - `clear` removes every member. Its block must hold an event on its member, and that event carries the removal.
 - When `entries` is declared, a queue holding more members than that at the end of a cycle is a violation.
 

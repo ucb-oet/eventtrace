@@ -26,8 +26,8 @@ class Misuse extends Module {
   when (fire(0)) { EventTrace.create(new Cell, event = "enq0") { c => c.key := 0.U; q.add(c) } }
   when (fire(1)) { EventTrace.create(new Cell, event = "enq1") { c => c.key := 1.U; q.add(c) } }
   when (fire(2)) { EventTrace.create(new Cell, event = "enq2") { c => c.key := 2.U; q.add(c) } }
-  when (fire(3)) { val h = q.head; h.event("deq") { q.pop(); h.complete() } }
-  when (fire(4)) { val t = q.last; t.event("deq_last") { q.pop(); t.complete() } }
+  when (fire(3)) { val h = q.pop(); h.event("deq") { h.complete() } }
+  when (fire(4)) { val s = q.pop(1); s.event("deq1") { s.complete() } }
   when (fire(5)) { q.clear { c => c.event("flush") { c.abort() } } }
 
   when (fire(6)) { EventTrace.create(new Cell, event = "alloc0") { c => c.key := 0.U; r.add(0.U, c) } }
@@ -37,7 +37,7 @@ class Misuse extends Module {
   when (fire(10)) { r(1.U).event("find1") {} }
   when (fire(11)) { r.rollback(1.U) { c => c.event("squash1") { c.abort() } } }
   when (fire(12)) { r.rollback(3.U) { c => c.event("squash3") { c.abort() } } }
-  when (fire(13)) { val h = r.head; h.event("commit") { r.pop(); h.complete() } }
+  when (fire(13)) { val h = r.pop(); h.event("commit") { h.complete() } }
 
   when (fire(14)) { EventTrace.create(new Cell, event = "put_a") { c => c.key := 0.U; m.add(1.U, c) } }
   when (fire(15)) { EventTrace.create(new Cell, event = "put_b") { c => c.key := 1.U; m.add(1.U, c) } }
@@ -45,7 +45,7 @@ class Misuse extends Module {
   when (fire(17)) { m(0.U).event("find0") {} }
 
   // A pop and a clear that keep the member alive, so that the only rule they break is removing it twice.
-  when (fire(18)) { val h = q.head; h.event("deq_keep") { q.pop() } }
+  when (fire(18)) { val h = q.pop(); h.event("deq_keep") {} }
   when (fire(19)) { q.clear { c => c.event("drain") {} } }
 }
 

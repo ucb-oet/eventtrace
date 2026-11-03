@@ -121,8 +121,8 @@ class Structures extends Module {
     EventTrace.create(new Insn, event = "fetch") { i => i.pc := nextPc; fetchQueue.add(i) }
   }
   when (dispatch) {
-    val i = fetchQueue.head
-    i.event("dispatch") { fetchQueue.pop(); rob.add(robTail, i) }
+    val i = fetchQueue.pop()
+    i.event("dispatch") { rob.add(robTail, i) }
     EventTrace.create(new Uop, event = "dispatch") { u => u.pc := dispPc; u.insn := i; station.add(dispSlot, u) }
   }
   when (exe) {
@@ -136,8 +136,8 @@ class Structures extends Module {
     fetchQueue.clear { i => i.event("flush") { i.abort() } }
   }
   when (commit) {
-    val h = rob.head
-    h.event("commit") { rob.pop(); h.complete() }
+    val h = rob.pop()
+    h.event("commit") { h.complete() }
   }
 }
 

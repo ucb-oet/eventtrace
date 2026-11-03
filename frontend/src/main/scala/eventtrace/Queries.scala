@@ -1,3 +1,5 @@
+/* Collections, views, choosers, predicates, and tests: the queries an annotation runs against the tracked state, and
+ * their representation for generation. */
 package eventtrace
 
 import chisel3._
@@ -35,11 +37,18 @@ sealed abstract class QueueBase[T <: ObjectType] private[eventtrace] (
   private[eventtrace] val info: CollectionInfo,
   gen: () => T) extends View[T](ViewExpr.Source(info), gen) {
 
-  /** The open event's subject leaves the head when the event fires. The pops of one cycle must take the first
-    * members, as many as there are pops; anything else is a runtime violation.
+  /** The head, which leaves when the one event declared on it fires; or, for the `k`-th of a cycle's pops counting
+    * from 0, member `k`. The pops of one cycle must take the first members, as many as there are pops; anything else
+    * is a runtime violation. The handle is a chooser's, valid anywhere, and takes exactly one event; `pop` itself is
+    * called outside any event block.
     */
-  def pop()(implicit sourceInfo: SourceInfo): Unit =
-    EventTrace.subjectEffect(Effect.Pop(info), info, s"${info.valName}.pop()", sourceInfo)
+  def pop(k: Int = 0)(implicit sourceInfo: SourceInfo): T = {
+    val what = if (k == 0) s"${info.valName}.pop()" else s"${info.valName}.pop($k)"
+    if (k < 0) EventTrace.elaborationError(s"$what needs a position of at least 0", sourceInfo)
+    val handle = if (k == 0) head else at(k)
+    EventTrace.popping(handle, info, what, sourceInfo)
+    handle
+  }
 
   /** Every member leaves. `body` runs once at elaboration with a handle standing for every member, as an `iter` block
     * does, and must hold exactly one event on it, which carries the member's removal.
@@ -53,8 +62,8 @@ sealed abstract class QueueBase[T <: ObjectType] private[eventtrace] (
   * {{{
   * val fetchBuf = EventTrace.queue(new Insn, entries = 16)
   * EventTrace.create(new Insn, event = "fetch") { i => i.pc := pc; fetchBuf.add(i) }
-  * val h = fetchBuf.head
-  * h.event("decode") { fetchBuf.pop() }
+  * val h = fetchBuf.pop()
+  * h.event("decode") {}
   * fetchBuf.clear { i => i.event("squash") { i.abort() } }
   * }}}
   */
@@ -72,8 +81,8 @@ final class Queue[T <: ObjectType] private[eventtrace] (info: CollectionInfo, ge
   * val rob = EventTrace.rob(new Insn, entries = 16, keys = 32)
   * i.event("issue") { rob.add(stag, i) }
   * rob(cmplStag).event("complete") { ... }
-  * val h = rob.head
-  * h.event("commit") { rob.pop(); h.complete() }
+  * val h = rob.pop()
+  * h.event("commit") { h.complete() }
   * rob.rollback(stagFirst) { i => i.event("squash") { i.abort() } }
   * }}}
   */
@@ -388,7 +397,7 @@ private[eventtrace] object Effect {
   /** The subject leaves a set or a map. */
   final case class Remove(collection: CollectionInfo) extends Effect
 
-  /** The subject leaves the head of a queue or a ROB. */
+  /** The subject, which `pop` returned, leaves the head of a queue or a ROB. */
   final case class Pop(collection: CollectionInfo) extends Effect
 
   /** The subject leaves a queue or a ROB through the rollback or clear whose block holds the event. */

@@ -1,3 +1,6 @@
+<!-- How to annotate a Chisel design: events, objects, collections, queries, and the rules elaboration and the runtime
+     check. -->
+
 # Writing annotations
 
 Annotations are ordinary Chisel code in a module. They use these imports:
@@ -223,17 +226,19 @@ and are shared between modules the same way.
 | ROB | `EventTrace.rob(new T, entries = n, keys = k)` | `add(key, i)` | `pop()`, `rollback(newTail) { i => ... }`, `clear { i => ... }` | queries, `rob(key)` |
 | Map | `EventTrace.map(new T, entries = n)` | `add(key, i)` | `remove(i)` | queries, `map(key)` |
 
-A **queue** is a FIFO. `add(i)` joins the tail. `pop()` removes the subject of the event it is in, which must be at the
-head: the pops of one cycle must take the first members. `clear` removes every member: its block, like an `iter`
-block, runs with a handle standing for every member and must hold exactly one event on it, which carries the removal.
-A queue declared with `entries` may hold at most that many members at the end of a cycle.
+A **queue** is a FIFO. `add(i)` joins the tail. `pop()` returns the head, a chooser's handle, which leaves the queue
+with the one event declared on it. The `k`-th of a cycle's pops, counting from 0, is `pop(k)`, which returns member
+`k`, as for a second commit slot: the pops of one cycle must take the first members. `pop` is called outside any
+event block. `clear` removes every member: its block, like an `iter` block, runs with a handle standing for every
+member and must hold exactly one event on it, which carries the removal. A queue declared with `entries` may hold at
+most that many members at the end of a cycle.
 
 ```scala
 val fetchBuf = EventTrace.queue(new Insn, entries = 4)
 when (fetch) { EventTrace.create(new Insn, event = "fetch") { i => i.pc := pc; fetchBuf.add(i) } }
 when (decode) {
-  val i = fetchBuf.head
-  i.event("decode") { fetchBuf.pop() }
+  val i = fetchBuf.pop()
+  i.event("decode") {}
 }
 when (redirect) { fetchBuf.clear { i => i.event("flush") { i.abort() } } }
 ```
@@ -252,14 +257,18 @@ the size of the tag space: 32 for 16 entries tagged with a wrap bit, or `entries
 ```scala
 val rob = EventTrace.rob(new Insn, entries = 8, keys = 16)
 when (dispatch) {
-  val i = fetchBuf.head
-  i.event("dispatch") { fetchBuf.pop(); rob.add(robTail, i) }
+  val i = fetchBuf.pop()
+  i.event("dispatch") { rob.add(robTail, i) }
 }
 when (writeback) { rob(wbTag).event("complete") {} }
 when (mispredict) { rob.rollback(branchTag + 1.U) { i => i.event("squash") { i.abort() } } }
-when (commit) {
-  val h = rob.head
-  h.event("commit") { rob.pop(); h.complete() }
+when (commit(0)) {
+  val h = rob.pop()
+  h.event("commit") { h.complete() }
+}
+when (commit(1)) {  // the second commit slot
+  val h = rob.pop(1)
+  h.event("commit") { h.complete() }
 }
 ```
 
@@ -391,8 +400,9 @@ Elaboration stops with an error that names the source line when an annotation br
 - a block never captures and assigns the same name;
 - sites that share an event name have the same fields and types, give a field the same role, and agree on creating,
   completing, and aborting;
-- effects act only on the event's subject, and `pop()` only on a subject of the type its queue holds;
-- handles are used only where they are valid;
+- effects act only on the event's subject;
+- handles are used only where they are valid, `pop` is called outside event blocks, and the member it returns takes
+  exactly one event;
 - events, `iter`, `clear`, `rollback`, and tests do not nest in ways the library does not support, and the block of
   a `clear` or `rollback` holds exactly one event on its member;
 - a queue, ROB, or map has at least one entry, a ROB has at least as many keys as entries, and a literal key is below
