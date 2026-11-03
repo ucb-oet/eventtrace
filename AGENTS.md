@@ -20,11 +20,16 @@ to every change.
 - [docs/formats.md](docs/formats.md) is the contract for the trace and the manifest. Change it in the same commit as
   the format. `reader/proto/waterfall.proto` is a copy of illilouette's, which illilouette owns: change it there
   first, then copy it.
+- Dependencies run one way. `runtime/src` depends on nothing else in the repository. The Chisel frontend ships the
+  runtime, and `oet` builds on it. The reader and the Python package depend only on the formats, `proto/` and the
+  manifest, never on the runtime's code.
 
 ## Design and plans
 
 - Plans in `docs/plans/` record only decisions agreed with the user. Keep options still under discussion in the
   conversation, even after a concession, and do not write a recommendation into a plan before it is agreed.
+- Keep a plan only while its work is active. When the work is done, delete the plan and move any lasting contract or
+  maintenance rule to the page that owns it.
 - When implementation reaches a rule the design leaves open, including in a test or an example, stop and raise it
   with the options. Do not pick one silently, and point out any default the implementation adopted on its own.
 - Raise a design issue in four parts: what the issue is, example code where it arises, why it goes wrong, and a
@@ -85,8 +90,15 @@ For first-party Scala, C++, Rust, Python, and SystemVerilog, including the examp
   outputs, behavior, or invariants when a reader needs them to understand it.
 - Keep comments concise and specific, and update them when the implementation changes. A comment that only repeats
   the declaration's name is not enough.
+
+## Documentation
+
 - Update the documentation page that owns a behavior in the same change as the behavior. Link to it from elsewhere
   instead of repeating it.
+- Put new material in the section that owns it, and remove nearby duplication and stale links while there. Do not
+  rework an unrelated page only to make its headings match.
+- After changing documentation, check its relative links and anchors, its code fences, the commands it documents,
+  and `git diff --check`.
 
 ## Git
 
