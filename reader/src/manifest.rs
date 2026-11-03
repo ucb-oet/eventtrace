@@ -155,8 +155,10 @@ pub struct EnumSchema {
 pub struct Site {
     pub site_id: u32,
     pub event_name: String,
-    pub instance: String,
-    pub source: String,
+    /// The instance path of the site's module, missing for a site with no single place in the design.
+    pub instance: Option<String>,
+    /// The site's source location, missing likewise.
+    pub source: Option<String>,
     /// Starts blocking in the current stage; a stage change or termination clears it.
     #[serde(default)]
     pub blocks: bool,
