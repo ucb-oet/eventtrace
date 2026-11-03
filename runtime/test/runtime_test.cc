@@ -196,6 +196,39 @@ int main() {
   const std::vector<unsigned char> trace{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
   expect(trace == want_trace, "the trace is a header, then one record per cycle, in protobuf's wire format");
 
+  // Handlers, the C++ library's records, are ignored until a file is open. Each runs once its cycle is complete,
+  // after the cycle's payload records and before its commit, in ascending order, with equal orders as they arrived.
+  {
+    FakeSites qsites;
+    eventtrace::Runtime q(qsites);
+    std::vector<std::string> ran;
+    const auto handler = [&](const char* name, bool emits = false) {
+      return [&, name, emits] {
+        ran.push_back(std::string(name) + " after " + std::to_string(qsites.handled.size()) + " handled, " +
+                      std::to_string(qsites.commits.size()) + " committed");
+        if (emits) { q.writer().begin(1); q.writer().end(); }
+      };
+    };
+    q.queue(1, 0, handler("ignored"));
+    expect(!q.is_open() && ran.empty(), "handlers are ignored until a file is open");
+    q.open("build/runtime_test_queued.trace");
+    expect(q.is_open(), "a file is open after open()");
+    q.queue(5, 2, handler("5:2"));
+    q.queue(5, 0, handler("5:0 first"));
+    buffer[0] = 50; q.accept(5, 1, buffer, 1);
+    q.queue(5, 0, handler("5:0 second"));
+    expect(ran.empty(), "no handler runs before its cycle is complete");
+    q.queue(7, 1, handler("7:1", true));
+    q.finish();
+    expect(ran == std::vector<std::string>({"5:0 first after 1 handled, 0 committed",
+                                            "5:0 second after 1 handled, 0 committed",
+                                            "5:2 after 1 handled, 0 committed", "7:1 after 1 handled, 1 committed"}),
+           "handlers run after their cycle's payload records and before its commit, by order, then as they arrived");
+    expect(qsites.commits == std::vector<long long>({5, 7}), "each cycle with handlers commits once");
+    expect(cycles_in("build/runtime_test_queued.trace") == std::vector<long long>({5, 7}),
+           "a handler's events are written in its cycle's record");
+  }
+
   // Each trigger's cycle is recorded, and the stop trigger counts only events from the cycle the window opens.
   using Cycles = std::vector<long long>;
   expect(window("", "") == Cycles({5, 6, 8, 9}), "without triggers, every cycle is written");
@@ -217,7 +250,8 @@ int main() {
   if (failures) return 1;
   std::printf("PASS: records are ignored until a file is open, records are handled in (cycle, site) order with "
               "event IDs 0 to 4, each object type numbers its objects from 0, payloads are copied, each cycle commits "
-              "once, open() and finish() are idempotent, the trace is byte-exact protobuf, recording windows open and close on "
+              "once, open() and finish() are idempotent, the trace is byte-exact protobuf, queued handlers run once their "
+              "cycle is complete, by order, between its payload records and its commit, recording windows open and close on "
               "cycles and on events' fields, and bad triggers stop the run\n");
   return 0;
 }
