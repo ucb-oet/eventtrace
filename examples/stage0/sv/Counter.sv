@@ -9,7 +9,7 @@ module Counter (
 `ifdef OET_ENABLE
   import "DPI-C" function void oet_tick(input longint cycle, input int unsigned count, input byte delta);
 `endif
-  `OET_CLOCK(clock)
+  `OET_SETUP(clock)
 
   // Starts near the top of the range, as the Chisel counter does.
   logic [31:0] count;

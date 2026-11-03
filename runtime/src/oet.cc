@@ -601,7 +601,7 @@ Call::Call(const char* n, unsigned c, Events list) : name(n), count(c) {
 
 }  // namespace oet
 
-// The SystemVerilog side's entry points, which `OET_CLOCK imports: the first opens the trace given as
+// The SystemVerilog side's entry points, which `OET_SETUP imports: the first opens the trace given as
 // +eventtrace=<path>, with the recording window's triggers, and the manifest beside it as <path>.json.
 extern "C" void oet_open(const char* path, const char* start, const char* stop) {
   oet::detail::library().open(path, start, stop);

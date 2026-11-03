@@ -1,7 +1,7 @@
 // oet: EventTrace for SystemVerilog designs. The design calls a DPI function of its own at each traced point, and
 // its C++ handles the call with the oet library (runtime/src/oet.h).
 //
-// Everything here is guarded by OET_ENABLE. Without it, `OET_CLOCK(...) expands to nothing and `OET(...) to a null
+// Everything here is guarded by OET_ENABLE. Without it, `OET_SETUP(...) expands to nothing and `OET(...) to a null
 // statement, so a build compiles nothing of the trace and has no DPI symbols. A design's own DPI imports, and any
 // always block that exists only to call, go inside `ifdef OET_ENABLE too.
 //
@@ -9,7 +9,7 @@
 //   `ifdef OET_ENABLE
 //     import "DPI-C" function void oet_decode(input longint cycle, input int slot, input int unsigned pc);
 //   `endif
-//   `OET_CLOCK(clk_i)
+//   `OET_SETUP(clk_i)
 //   always_ff @(posedge clk_i) begin
 //     ...
 //     else if (dec_fire) begin
@@ -32,11 +32,11 @@
 // A call, as a statement.
 `define OET(call) call;
 
-// Declares oet_cycle, the edges of `clk since the simulation started, which every call passes first. It also opens
-// the trace given as +eventtrace=<path>, with the recording window's triggers +eventtrace_start=<trigger> and
-// +eventtrace_stop=<trigger>, as Chisel's sinks do, and finishes it when the simulation ends. A module that calls
-// declares it once; every module may, and only the first open counts.
-`define OET_CLOCK(clk) \
+// Sets up a module that calls. It declares oet_cycle, the edges of `clk since the simulation started, which every
+// call passes first. It also opens the trace given as +eventtrace=<path>, with the recording window's triggers
+// +eventtrace_start=<trigger> and +eventtrace_stop=<trigger>, as Chisel's sinks do, and finishes it when the
+// simulation ends. Each module that calls uses it once; only the first open counts.
+`define OET_SETUP(clk) \
   import "DPI-C" function void oet_open(input string path, input string start, input string stop); \
   import "DPI-C" function void oet_finish(); \
   initial begin \
@@ -55,7 +55,7 @@
 
 // A null statement, so that `if (c) `OET(...)` stays a statement.
 `define OET(call) ;
-`define OET_CLOCK(clk)
+`define OET_SETUP(clk)
 
 `endif
 

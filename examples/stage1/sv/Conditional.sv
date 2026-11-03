@@ -11,7 +11,7 @@ module Lane #(
 );
 `ifdef OET_ENABLE
   import "DPI-C" function void oet_lane(input longint cycle, input int index, input byte unsigned value);
-  `OET_CLOCK(clock)
+  `OET_SETUP(clock)
   always @(posedge clock)
     if (!reset && in[0]) oet_lane(oet_cycle, Index, in);
 `endif
@@ -37,7 +37,7 @@ module Conditional (
   import "DPI-C" function void oet_rise2(input longint cycle);
   import "DPI-C" function void oet_fall2(input longint cycle);
 `endif
-  `OET_CLOCK(clock)
+  `OET_SETUP(clock)
 
   logic [7:0] count;
   logic [1:0] phase;

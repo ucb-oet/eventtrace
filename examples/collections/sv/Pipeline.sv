@@ -21,7 +21,7 @@ module Pipeline (
   import "DPI-C" function void oet_request_done(input longint cycle);
   import "DPI-C" function void oet_pick(input longint cycle, input bit oldest);
 `endif
-  `OET_CLOCK(clock)
+  `OET_SETUP(clock)
 
   logic [7:0] count;
   logic       decV, exeV, wbV;

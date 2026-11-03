@@ -11,7 +11,7 @@ module Arrivals (
   import "DPI-C" function void oet_arrive8(input longint cycle, input byte unsigned seq);
   import "DPI-C" function void oet_grant(input longint cycle, input byte unsigned slot);
 `endif
-  `OET_CLOCK(clock)
+  `OET_SETUP(clock)
 
   logic [7:0] count;
   assign io_count = count;

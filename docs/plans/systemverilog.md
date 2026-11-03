@@ -21,7 +21,7 @@ Some of Chisel's conveniences are given up; see [Accepted losses](#accepted-loss
 
 New code uses `oet` and `OET`:
 
-- SystemVerilog: the macros `` `OET(...) `` and `` `OET_CLOCK(clk) ``, the build define `OET_ENABLE`, and DPI
+- SystemVerilog: the macros `` `OET(...) `` and `` `OET_SETUP(clk) ``, the build define `OET_ENABLE`, and DPI
   functions named `oet_*`.
 - C++: the namespace `oet`, and macros named `OET_*`.
 
@@ -34,7 +34,7 @@ The macros ship in a header under `systemverilog/`:
 
 - `` `OET(call) `` expands to the call when `OET_ENABLE` is defined, and otherwise to a null statement, so that
   `` if (c) `OET(...) `` stays a statement.
-- `` `OET_CLOCK(clk) `` declares `oet_cycle`, the clock edges since the simulation started. It also holds what a
+- `` `OET_SETUP(clk) `` declares `oet_cycle`, the clock edges since the simulation started. It also holds what a
   Chisel sink's `initial` and `final` blocks do: it reads the same plusargs (`+eventtrace`, `+eventtrace_start`,
   `+eventtrace_stop`), opens the trace, and finishes it.
 

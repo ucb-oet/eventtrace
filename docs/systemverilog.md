@@ -14,10 +14,10 @@ The examples have SystemVerilog versions in their `sv/` directories. `examples/s
 `systemverilog/oet.svh` gives two macros, which do nothing unless the build defines `OET_ENABLE`:
 
 - `` `OET(call) `` makes a call a statement. Without `OET_ENABLE`, it is a null statement.
-- `` `OET_CLOCK(clk) `` declares `oet_cycle`, the edges of `clk` since the simulation started. It also opens the
-  trace from `+eventtrace=<path>`, with the recording window's `+eventtrace_start` and `+eventtrace_stop`, as Chisel's
-  sinks do, and finishes it when the simulation ends. Every module that calls declares it once; only the first open
-  counts. Without `OET_ENABLE`, it is nothing.
+- `` `OET_SETUP(clk) `` sets up a module that calls. It declares `oet_cycle`, the edges of `clk` since the simulation
+  started. It also opens the trace from `+eventtrace=<path>`, with the recording window's `+eventtrace_start` and
+  `+eventtrace_stop`, as Chisel's sinks do, and finishes it when the simulation ends. Every module that calls uses it
+  once; only the first open counts. Without `OET_ENABLE`, it is nothing.
 
 The design's own DPI imports go inside `` `ifdef OET_ENABLE ``, so that a build without it compiles nothing of the
 trace and has no DPI symbols. Here is stage0's counter, which records a tick every eighth cycle:
@@ -29,7 +29,7 @@ module Counter (input logic clock, input logic reset, output logic [31:0] io_cou
 `ifdef OET_ENABLE
   import "DPI-C" function void oet_tick(input longint cycle, input int unsigned count, input byte delta);
 `endif
-  `OET_CLOCK(clock)
+  `OET_SETUP(clock)
 
   logic [31:0] count;
   always_ff @(posedge clock) begin
