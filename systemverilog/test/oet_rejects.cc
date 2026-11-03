@@ -95,6 +95,18 @@ oet::Call c{"c", {poke}};
 #define WANT "object type \"spaced type\": the name is not an identifier"
 oet::Event<Spaced> make{"make", oet::create};
 oet::Call c{"c", {make}};
+#elif CASE == 15
+#define WANT "queue q has 0 entries; a queue has at least 1"
+oet::Queue<Cell> q{"q", 0};
+#elif CASE == 16
+#define WANT "ROB r has 0 entries; a ROB has at least 1"
+oet::Rob<Cell> r{"r", 0, 4};
+#elif CASE == 17
+#define WANT "ROB r has 4 keys for 8 entries; it needs a key for each entry"
+oet::Rob<Cell> r{"r", 8, 4};
+#elif CASE == 18
+#define WANT "map m has 0 entries; a map has at least 1"
+oet::Map<Cell> m{"m", 0};
 #endif
 
 int main() {

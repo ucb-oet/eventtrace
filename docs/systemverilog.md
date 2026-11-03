@@ -1,3 +1,6 @@
+<!-- How to trace a SystemVerilog design with oet: the macros, the C++ library's declarations and handlers, the sites,
+     the manifest, the checks, the build, and what differs from Chisel. -->
+
 # Annotating SystemVerilog
 
 A SystemVerilog design is traced in two halves. The design calls a DPI function of its own at each point where
@@ -6,8 +9,8 @@ model as the Chisel library: events, objects, collections, and queries, with the
 [Writing annotations](annotations.md)). The library writes the trace and its manifest, which the reader and viewers
 read as they read a Chisel design's.
 
-The examples have SystemVerilog versions in their `sv/` directories. `examples/stage0/sv` is the smallest and
-`examples/collections/sv` the most complete.
+The examples have SystemVerilog versions in their `sv/` directories. `examples/stage0/sv` is the smallest,
+`examples/collections/sv` covers queries on a set, and `examples/structures/sv` covers queues, ROBs, and maps.
 
 ## The SystemVerilog half
 
@@ -147,6 +150,41 @@ for (Instruction& i : active.order_by([](Instruction& m) { return m.odd.get(); }
 A predicate or key is a C++ lambda, so a query's message cannot show its text: it names the view as
 `active.where(...)`.
 
+#### Queues, ROBs, and maps
+
+The other kinds of collection follow Chisel's (see [Queues, ROBs, and maps](annotations.md#queues-robs-and-maps)),
+and take the same queries:
+
+```cpp
+oet::Queue<Insn> fetch_queue{"fetch_queue", 4};  // entries are optional for a queue
+oet::Rob<Insn> rob{"rob", 8, 16};                // entries, then keys
+oet::Map<Uop> station{"station", 4};             // entries
+```
+
+Each operation that removes members returns them, and the next event emitted on each carries its removal, as with
+any effect:
+
+- `fetch_queue.pop()` returns the head, and `pop(k)` returns member `k`, for the `k`-th of a cycle's pops. The pops
+  of one cycle must take the first members.
+- `fetch_queue.clear()` returns every member, as a view.
+- `rob.rollback(new_tail)` returns the members from the one with key `new_tail` through the youngest, as a view.
+  `new_tail` may also be the key the tail allocates next, which returns none.
+- `station.remove(u)` removes any member of a map, as for a set.
+
+`rob.add(tag, i)` and `station.add(slot, u)` take the hardware's key first, and `rob(tag)` and `station(slot)` find
+a member by it. Here is `examples/structures` in C++:
+
+```cpp
+Insn& i = fetch_queue.pop();
+rob.add(rob_tail, i);
+dispatch.emit(i);
+
+for (Insn& i : rob.rollback(cut)) squash.emit(i);
+for (Insn& i : fetch_queue.clear()) flush.emit(i);
+
+commit.emit(rob.pop());
+```
+
 ### Events
 
 An event has a subject type, or `oet::none`, and the struct of values it carries beyond its subject's fields, or
@@ -228,9 +266,9 @@ edge, and an event's effects hold from the next cycle.
 
 - `event.create()` creates the subject of a create event, whose handler then assigns its fields and emits the event
   on it.
-- Assigning a field, as `i.stage = Stage::Execute`, and `add` and `remove` on a collection are effects. They wait on
-  the object until an event is emitted on it, which carries the assigned values and applies the effects at the end of
-  the cycle. Effects still waiting when the handler returns stop the run.
+- Assigning a field, as `i.stage = Stage::Execute`, and `add`, `remove`, `pop`, `clear`, and `rollback` on a
+  collection are effects. They wait on the object until an event is emitted on it, which carries the assigned values
+  and applies the effects at the end of the cycle. Effects still waiting when the handler returns stop the run.
 - `emit` writes the event's record. It checks that the record assigns each listed subject field, assigns no other,
   and sets each value that is not optional, and that every value fits its type.
 - An `if` takes the place of `EventTrace.test` and `otherwise`, and a range-for over a view the place of `iter`.
@@ -294,12 +332,13 @@ struct, a value's type, and the DPI functions' signatures against the imports.
 When the trace opens, the library checks the declarations. Among the rules: names are identifiers, and fields take
 no reserved name; an object type has at most 64 fields and one parent; enums with one name are the same enum; events
 with one name share one declaration; create events list every `const` field, and others list none; a cause or
-lifecycle needs a subject; a call has at least one index.
+lifecycle needs a subject; a call has at least one index; a queue, ROB, or map has at least one entry, and a ROB has
+at least as many keys as entries.
 
 While it records, the library checks each handler: the checks of `emit` above; a field assigned outside a handler, a
 `const` field outside its create event, or a field twice before an event; an event the running call does not declare;
-an event other than its create on an object created in the same cycle; an index out of range; and the runtime's
-checks, as for a Chisel build (see [What the runtime checks](annotations.md#what-the-runtime-checks)). A broken rule
+an event other than its create on an object created in the same cycle; an index out of range; a ROB or map key
+with no member, and a rollback to a key that is neither live nor the tail; and the runtime's checks, as for a Chisel build (see [What the runtime checks](annotations.md#what-the-runtime-checks)). A broken rule
 stops the simulation with a message on standard error that names where it broke, by its event and site or its call,
 and the cycle:
 
@@ -339,4 +378,7 @@ checks that the other build compiles nothing of the trace.
 - A query's message names its view without the predicate's text.
 - A design has two files, tied together by its DPI functions.
 - Every event with a subject has a blocking site, and every `by` is optional in the manifest.
-- Collections are sets only: queues, ROBs, and maps are not in `oet` yet.
+- `pop`, `clear`, and `rollback` return the members they remove, and the next event emitted on each carries its
+  removal. In Chisel, `pop` returns a handle that takes exactly one event, and the block of `clear` or `rollback`
+  holds exactly one event on its member.
+- A key is checked when the handler runs, where Chisel checks a literal key at elaboration.

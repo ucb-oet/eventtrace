@@ -1,3 +1,5 @@
+// oet's implementation: the library's bookkeeping, emit's checks, the declarations' checks when the trace opens, the
+// manifest, and the entry points that `OET_SETUP imports.
 #include "oet.h"
 
 #include <array>
@@ -515,6 +517,24 @@ void Library::check_declarations() const {
   for (const Call* call : calls) {
     if (!is_identifier(call->name)) fail("call " + quote(call->name) + ": the name is not an identifier");
     if (call->count == 0) fail("call " + call->name + " has no indices");
+  }
+  for (const CollectionDecl& c : collections) {
+    const std::string entries = std::to_string(c.entries.value_or(0));
+    switch (c.kind) {
+      case CollectionDecl::Kind::Set: break;
+      case CollectionDecl::Kind::Queue:
+        if (c.entries && *c.entries == 0) fail("queue " + c.name + " has 0 entries; a queue has at least 1");
+        break;
+      case CollectionDecl::Kind::Rob:
+        if (*c.entries == 0) fail("ROB " + c.name + " has 0 entries; a ROB has at least 1");
+        if (c.keys < *c.entries)
+          fail("ROB " + c.name + " has " + std::to_string(c.keys) + " keys for " + entries +
+               " entries; it needs a key for each entry");
+        break;
+      case CollectionDecl::Kind::Map:
+        if (*c.entries == 0) fail("map " + c.name + " has 0 entries; a map has at least 1");
+        break;
+    }
   }
 }
 

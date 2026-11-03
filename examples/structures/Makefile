@@ -1,4 +1,4 @@
-# Structures: a pipeline tracked through a queue, a ROB, and a map.
+# Structures: a pipeline tracked through a queue, a ROB, and a map, in Chisel and in SystemVerilog.
 SBT_PROJECT := structures
 MAIN        := eventtrace.examples.structures.Main
 DUT         := Structures
@@ -25,3 +25,19 @@ $(VIOLATIONS): violations.cc $(MISUSE_DIR)/eventtrace_sites.h
 
 check-violations: $(VIOLATIONS) $(EVENTTRACE)
 	$(VIOLATIONS) "$(DUMP)" $(MISUSE_DIR)/eventtrace_manifest.json $(BUILD_DIR)
+
+# The SystemVerilog version: Structures.sv and its C++, checked by the same check.awk.
+SV_SOURCES := sv/Structures.sv
+SV_CC      := sv/structures.cc
+include ../sv.mk
+
+# The same sequences against the C++ library, which the SystemVerilog version uses.
+SV_VIOLATIONS := $(BUILD_DIR)/sv_violations
+$(SV_VIOLATIONS): sv/violations.cc $(OET_CC) $(OET_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(OET_CFLAGS) -O2 -Wall -Wextra -Werror -o $@ sv/violations.cc $(OET_CC)
+
+.PHONY: check-sv-violations
+check-sv: check-sv-violations
+check-sv-violations: $(SV_VIOLATIONS) $(EVENTTRACE)
+	$(SV_VIOLATIONS) "$(DUMP)" $(BUILD_DIR)

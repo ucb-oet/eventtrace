@@ -731,8 +731,18 @@ void touch(Object& o);
 long long current_cycle();
 std::string describe(const Object& o);
 
-template <class T>
-eventtrace::Collection<T> make_collection(const char* name);
+// A collection's declaration, which the library checks when the trace opens.
+struct CollectionDecl {
+  enum class Kind { Set, Queue, Rob, Map } kind;
+  std::string name;
+  std::optional<std::size_t> entries;  // none for a set, or a queue declared without entries
+  uint64_t keys = 0;                   // a ROB's
+};
+
+// The tracker's collection C, registered as `decl` describes it; `sizes` are C's constructor arguments after its
+// name.
+template <class C, class... Sizes>
+C make_collection(const CollectionDecl& decl, const char* name, Sizes... sizes);
 
 }  // namespace detail
 
@@ -832,16 +842,15 @@ class View {
   std::string what_;
 };
 
-// A set of objects that keeps the order they joined in. Queries see the members from before the clock edge; add and
-// remove are effects of the next event emitted on the object.
-template <class T>
-class Collection {
- public:
-  explicit Collection(const char* name) : impl_(detail::make_collection<T>(name)) {}
-  Collection(const Collection&) = delete;
-  Collection& operator=(const Collection&) = delete;
+namespace detail {
 
-  View<T> view() const { return View<T>(impl_.members(), impl_.name()); }
+// The queries every kind of collection takes: those of a view of its members from before the clock edge, in the
+// kind's order. Self holds the tracker's collection as impl_, which no effect changes before the cycle's handlers
+// have all run.
+template <class T, class Self>
+class Queries {
+ public:
+  View<T> view() const { return View<T>(members(), name()); }
   template <class P>
   View<T> where(P&& pred) const {
     return view().where(std::forward<P>(pred));
@@ -854,17 +863,128 @@ class Collection {
   T& head() const { return view().head(); }
   T& last() const { return view().last(); }
   T& at(std::size_t k) const { return view().at(k); }
-  std::size_t size() const { return impl_.members().size(); }
-  bool empty() const { return impl_.members().empty(); }
-  // The members from before the clock edge, which no effect changes before the cycle's handlers have all run.
-  typename View<T>::iterator begin() const { return typename View<T>::iterator(impl_.members().begin()); }
-  typename View<T>::iterator end() const { return typename View<T>::iterator(impl_.members().end()); }
+  std::size_t size() const { return members().size(); }
+  bool empty() const { return members().empty(); }
+  typename View<T>::iterator begin() const { return typename View<T>::iterator(members().begin()); }
+  typename View<T>::iterator end() const { return typename View<T>::iterator(members().end()); }
+
+ protected:
+  Queries() = default;
+  Queries(const Queries&) = delete;
+  Queries& operator=(const Queries&) = delete;
+
+  const std::vector<T*>& members() const { return static_cast<const Self&>(*this).impl_.members(); }
+  std::string name() const { return static_cast<const Self&>(*this).impl_.name(); }
+};
+
+// What a queue and a ROB share besides their queries: members leave from the head, through pop, or all at once,
+// through clear. Self holds a tracker Queue or Rob as impl_.
+template <class T, class Self>
+class QueueOps : public Queries<T, Self> {
+ public:
+  // The head, which leaves the queue with the next event emitted on it; or, for the k-th of a cycle's pops counting
+  // from 0, member k. The pops of one cycle must take the first members, as many as there are pops.
+  T& pop(std::size_t k = 0);
+
+  // Every member, each of which leaves with the next event emitted on it.
+  View<T> clear();
+
+ protected:
+  // Stages the removal of each of `members`, by clear or rollback, and returns them as the view `what`.
+  View<T> leaving(std::vector<T*> members, const std::string& what);
+
+  auto& impl() { return static_cast<Self&>(*this).impl_; }
+};
+
+}  // namespace detail
+
+// A set of objects that keeps the order they joined in. Queries see the members from before the clock edge; add and
+// remove are effects of the next event emitted on the object.
+template <class T>
+class Collection : public detail::Queries<T, Collection<T>> {
+ public:
+  explicit Collection(const char* name)
+      : impl_(detail::make_collection<eventtrace::Collection<T>>({detail::CollectionDecl::Kind::Set, name}, name)) {}
 
   void add(T& o);
   void remove(T& o);
 
  private:
+  friend class detail::Queries<T, Collection>;
   eventtrace::Collection<T> impl_;
+};
+
+// A FIFO: members join at the tail and leave from the head, or all at once. Declared with `entries`, it may hold at
+// most that many members at the end of a cycle. Queries see the members oldest first.
+template <class T>
+class Queue : public detail::QueueOps<T, Queue<T>> {
+ public:
+  explicit Queue(const char* name)
+      : impl_(detail::make_collection<eventtrace::Queue<T>>({detail::CollectionDecl::Kind::Queue, name}, name,
+                                                             std::size_t{0})) {}
+  Queue(const char* name, std::size_t entries)
+      : impl_(detail::make_collection<eventtrace::Queue<T>>({detail::CollectionDecl::Kind::Queue, name, entries},
+                                                             name, entries)) {}
+
+  // o joins the tail with the next event emitted on it.
+  void add(T& o);
+
+ private:
+  friend class detail::Queries<T, Queue>;
+  friend class detail::QueueOps<T, Queue>;
+  eventtrace::Queue<T> impl_;
+};
+
+// A queue of at most `entries` members whose tail allocates keys, as a reorder buffer's tail allocates tags. Keys
+// count modulo `keys`, the size of the tag space. Queries see the members oldest first.
+template <class T>
+class Rob : public detail::QueueOps<T, Rob<T>> {
+ public:
+  Rob(const char* name, std::size_t entries, uint64_t keys)
+      : impl_(detail::make_collection<eventtrace::Rob<T>>({detail::CollectionDecl::Kind::Rob, name, entries, keys},
+                                                           name, entries, keys)) {}
+
+  // o joins the tail with `key`, the hardware's tag, with the next event emitted on it. The key must be the one the
+  // tail allocates next; the first addition sets where allocation starts.
+  void add(uint64_t key, T& o);
+
+  // The live member with `key`; the run stops if there is none.
+  T& operator()(uint64_t key) const;
+
+  // Moves the tail back to `new_tail`, the value the hardware writes into its tail pointer: the members from the one
+  // with key `new_tail` through the youngest, each of which leaves with the next event emitted on it, and allocation
+  // continues from `new_tail`. `new_tail` may also be the key the tail allocates next, which removes nothing; any
+  // other key stops the run.
+  View<T> rollback(uint64_t new_tail);
+
+ private:
+  friend class detail::Queries<T, Rob>;
+  friend class detail::QueueOps<T, Rob>;
+  eventtrace::Rob<T> impl_;
+};
+
+// Members under keys below `entries` that the hardware chooses, as from a free list. Queries see the members in the
+// order they joined.
+template <class T>
+class Map : public detail::Queries<T, Map<T>> {
+ public:
+  Map(const char* name, std::size_t entries)
+      : impl_(detail::make_collection<eventtrace::Map<T>>({detail::CollectionDecl::Kind::Map, name, entries}, name,
+                                                           entries)) {}
+
+  // o joins under `key` with the next event emitted on it. The key must be below the entries and free once the
+  // cycle's removals apply.
+  void add(uint64_t key, T& o);
+
+  // o leaves with the next event emitted on it.
+  void remove(T& o);
+
+  // The member under `key`; the run stops if there is none.
+  T& operator()(uint64_t key) const;
+
+ private:
+  friend class detail::Queries<T, Map>;
+  eventtrace::Map<T> impl_;
 };
 
 namespace detail {
@@ -878,7 +998,7 @@ class Library final : public eventtrace::Sites, public eventtrace::Effects {
   std::vector<std::unique_ptr<ObjectType>> types;
   std::vector<EventBase*> events;
   std::vector<Call*> calls;
-  unsigned collection_count = 0;
+  std::vector<CollectionDecl> collections;  // by index
 
   // The run.
   void open(const char* path, const char* start, const char* stop);
@@ -921,6 +1041,30 @@ class Library final : public eventtrace::Sites, public eventtrace::Effects {
     remove(*runtime_, site, event, c, o);
   }
   template <class T>
+  void stage_add(unsigned site, unsigned long long event, eventtrace::Queue<T>& q, T& o) {
+    add(*runtime_, site, event, q, o);
+  }
+  template <class T>
+  void stage_add(unsigned site, unsigned long long event, eventtrace::Rob<T>& r, T& o, uint64_t key) {
+    add(*runtime_, site, event, r, o, key);
+  }
+  template <class T>
+  void stage_add(unsigned site, unsigned long long event, eventtrace::Map<T>& m, T& o, uint64_t key) {
+    add(*runtime_, site, event, m, o, key);
+  }
+  template <class T>
+  void stage_remove(unsigned site, unsigned long long event, eventtrace::Map<T>& m, T& o) {
+    remove(*runtime_, site, event, m, o);
+  }
+  template <class T>
+  void stage_pop(unsigned site, unsigned long long event, eventtrace::Queue<T>& q, T& o) {
+    pop(*runtime_, site, event, q, o);
+  }
+  template <class T>
+  void stage_drop(unsigned site, unsigned long long event, eventtrace::Queue<T>& q, T& o) {
+    drop(*runtime_, site, event, q, o);
+  }
+  template <class T>
   void stage_destroy(unsigned site, unsigned long long event, T& o) {
     destroy(*runtime_, site, event, store<T>(), o);
   }
@@ -959,10 +1103,12 @@ class Library final : public eventtrace::Sites, public eventtrace::Effects {
 
 inline Library& library() { return Library::get(); }
 
-template <class T>
-eventtrace::Collection<T> make_collection(const char* name) {
+template <class C, class... Sizes>
+C make_collection(const CollectionDecl& decl, const char* name, Sizes... sizes) {
   Library& lib = library();
-  return eventtrace::Collection<T>(lib, lib.collection_count++, name);
+  const auto index = static_cast<unsigned>(lib.collections.size());
+  lib.collections.push_back(decl);
+  return C(lib, index, name, sizes...);  // constructed in place, so the tracker keeps its address
 }
 
 }  // namespace detail
@@ -1002,6 +1148,95 @@ void Collection<T>::remove(T& o) {
     detail::library().stage_remove(site, event, impl_, o);
   });
   detail::touch(o);
+}
+
+template <class T, class Self>
+T& detail::QueueOps<T, Self>::pop(std::size_t k) {
+  if (!detail::library().running) detail::fail("an object is popped from " + this->name() + " outside a handler");
+  T& o = k == 0 ? this->head() : this->at(k);
+  o.oet_moves.push_back([this, &o](unsigned site, unsigned long long event) {
+    detail::library().stage_pop(site, event, impl(), o);
+  });
+  detail::touch(o);
+  return o;
+}
+
+template <class T, class Self>
+View<T> detail::QueueOps<T, Self>::clear() {
+  if (!detail::library().running) detail::fail(this->name() + " is cleared outside a handler");
+  return leaving(this->members(), this->name() + ".clear()");
+}
+
+template <class T, class Self>
+View<T> detail::QueueOps<T, Self>::leaving(std::vector<T*> members, const std::string& what) {
+  for (T* m : members) {
+    m->oet_moves.push_back([this, m](unsigned site, unsigned long long event) {
+      detail::library().stage_drop(site, event, impl(), *m);
+    });
+    detail::touch(*m);
+  }
+  return View<T>(std::move(members), what);
+}
+
+template <class T>
+void Queue<T>::add(T& o) {
+  if (!detail::library().running) detail::fail(std::string("an object is added to ") + impl_.name() + " outside a handler");
+  o.oet_moves.push_back([this, &o](unsigned site, unsigned long long event) {
+    detail::library().stage_add(site, event, impl_, o);
+  });
+  detail::touch(o);
+}
+
+template <class T>
+void Rob<T>::add(uint64_t key, T& o) {
+  if (!detail::library().running) detail::fail(std::string("an object is added to ") + impl_.name() + " outside a handler");
+  o.oet_moves.push_back([this, &o, key](unsigned site, unsigned long long event) {
+    detail::library().stage_add(site, event, impl_, o, key);
+  });
+  detail::touch(o);
+}
+
+template <class T>
+T& Rob<T>::operator()(uint64_t key) const {
+  T* o = impl_.find(key);
+  if (!o) detail::fail(std::string(impl_.name()) + " has no member with key " + std::to_string(key));
+  return *o;
+}
+
+template <class T>
+View<T> Rob<T>::rollback(uint64_t new_tail) {
+  if (!detail::library().running) detail::fail(std::string(impl_.name()) + " is rolled back outside a handler");
+  std::optional<std::vector<T*>> members = impl_.following(new_tail);
+  if (!members)
+    detail::fail("rolls " + std::string(impl_.name()) + " back to key " + std::to_string(new_tail) +
+                 ", which is neither a live key nor its tail, " + std::to_string(*impl_.next()));
+  return this->leaving(std::move(*members), std::string(impl_.name()) + ".rollback(" + std::to_string(new_tail) + ")");
+}
+
+template <class T>
+void Map<T>::add(uint64_t key, T& o) {
+  if (!detail::library().running) detail::fail(std::string("an object is added to ") + impl_.name() + " outside a handler");
+  o.oet_moves.push_back([this, &o, key](unsigned site, unsigned long long event) {
+    detail::library().stage_add(site, event, impl_, o, key);
+  });
+  detail::touch(o);
+}
+
+template <class T>
+void Map<T>::remove(T& o) {
+  if (!detail::library().running)
+    detail::fail(std::string("an object is removed from ") + impl_.name() + " outside a handler");
+  o.oet_moves.push_back([this, &o](unsigned site, unsigned long long event) {
+    detail::library().stage_remove(site, event, impl_, o);
+  });
+  detail::touch(o);
+}
+
+template <class T>
+T& Map<T>::operator()(uint64_t key) const {
+  T* o = impl_.find(key);
+  if (!o) detail::fail(std::string(impl_.name()) + " has no member with key " + std::to_string(key));
+  return *o;
 }
 
 template <class T, class Values>

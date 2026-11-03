@@ -1,3 +1,5 @@
+<!-- EventTrace's front page: what it is, how the repository is laid out, and how to build and check it. -->
+
 # EventTrace
 
 EventTrace records hardware events from annotations in Chisel generators, such as each instruction's pass through a
@@ -51,7 +53,7 @@ Chipyard, reading traces, and the trace and manifest formats.
 | `proto/eventtrace.proto` | The trace format. |
 | `python/` | The standalone Python producer package and its interoperability tests. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, Sodor, and native NPU models. |
-| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. All but `structures` have a SystemVerilog version in `sv/`. |
+| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. Each has a SystemVerilog version in `sv/`. |
 | `docs/` | The documentation. |
 
 ## Use in Chipyard

@@ -17,7 +17,7 @@ test: $(BUILD_DIR)/oet_test $(EVENTTRACE) oet-rejects
 	$(BUILD_DIR)/oet_test $(EVENTTRACE)
 
 # Each case of oet_rejects.cc must stop the run, when the trace opens, with the message it names.
-REJECT_CASES := 1 2 3 4 5 6 7 8 9 10 11 12 13 14
+REJECT_CASES := 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18
 .PHONY: oet-rejects
 oet-rejects: $(addprefix $(BUILD_DIR)/oet_reject_,$(REJECT_CASES))
 	@for n in $(REJECT_CASES); do \

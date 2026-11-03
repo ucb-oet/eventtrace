@@ -215,21 +215,36 @@ class Rob final : public Queue<T> {
   Rob(Effects& effects, unsigned index, const char* name, std::size_t entries, uint64_t keys)
       : Queue<T>(effects, index, name, entries), keys_count_(keys) {}
 
-  // The live member with `key`, for rob(key); a violation if there is none.
-  T* lookup(Runtime& rt, unsigned site, uint64_t key) const {
+  // The live member with `key`, or null.
+  T* find(uint64_t key) const {
     const std::size_t at = this->position_of_key(key);
-    if (at == this->members_.size())
-      rt.violation(site, "%s has no member with key %llu", this->name(), static_cast<unsigned long long>(key));
-    return this->members_[at];
+    return at < this->members_.size() ? this->members_[at] : nullptr;
   }
 
-  // The members from key `tail` through the youngest, for rollback(tail). None if `tail` is the key the tail
-  // allocates next; a violation if it is neither that nor a live key.
-  std::vector<T*> from(Runtime& rt, unsigned site, uint64_t tail) const {
+  // The live member with `key`, for rob(key); a violation if there is none.
+  T* lookup(Runtime& rt, unsigned site, uint64_t key) const {
+    if (T* o = find(key)) return o;
+    rt.violation(site, "%s has no member with key %llu", this->name(), static_cast<unsigned long long>(key));
+  }
+
+  // The members from key `tail` through the youngest, which a rollback to `tail` removes. None if `tail` is the key
+  // the tail allocates next, or if no addition has set that yet; nothing at all if `tail` is neither that nor a live
+  // key, which is not a place the tail can move back to.
+  std::optional<std::vector<T*>> following(uint64_t tail) const {
     const std::size_t at = this->position_of_key(tail);
-    if (at < this->members_.size()) return std::vector<T*>(this->members_.begin() + static_cast<std::ptrdiff_t>(at),
-                                                           this->members_.end());
-    if (!next_ || tail == *next_) return {};
+    if (at < this->members_.size())
+      return std::vector<T*>(this->members_.begin() + static_cast<std::ptrdiff_t>(at), this->members_.end());
+    if (!next_ || tail == *next_) return std::vector<T*>();
+    return std::nullopt;
+  }
+
+  // The key the tail allocates next, once the first addition has set it.
+  std::optional<uint64_t> next() const { return next_; }
+
+  // The members a rollback to `tail` removes, for rollback(tail); a violation if `tail` is neither a live key nor the
+  // tail.
+  std::vector<T*> from(Runtime& rt, unsigned site, uint64_t tail) const {
+    if (std::optional<std::vector<T*>> leaving = following(tail)) return *leaving;
     rt.violation(site, "rolls %s back to key %llu, which is neither a live key nor its tail, %llu", this->name(),
                  static_cast<unsigned long long>(tail), static_cast<unsigned long long>(*next_));
   }
@@ -266,12 +281,16 @@ class Map final : public CollectionBase {
 
   const std::vector<T*>& members() const { return members_; }
 
+  // The member under `key`, or null.
+  T* find(uint64_t key) const {
+    const std::size_t at = position_of_key(key);
+    return at < members_.size() ? members_[at] : nullptr;
+  }
+
   // The member under `key`, for map(key); a violation if there is none.
   T* lookup(Runtime& rt, unsigned site, uint64_t key) const {
-    const std::size_t at = position_of_key(key);
-    if (at == members_.size())
-      rt.violation(site, "%s has no member with key %llu", name(), static_cast<unsigned long long>(key));
-    return members_[at];
+    if (T* o = find(key)) return o;
+    rt.violation(site, "%s has no member with key %llu", name(), static_cast<unsigned long long>(key));
   }
 
   void apply(Runtime& rt) override {

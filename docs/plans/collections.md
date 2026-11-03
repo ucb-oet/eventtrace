@@ -59,7 +59,6 @@ A reset in the middle of a run does not restart a ROB's allocation, so the next 
 - Reading a member's key in a predicate, or capturing it as an event field.
 - Recording which slot each member occupies in the trace, for bart's view.
 - A bit test in predicates, for structures that kill entries by branch mask.
-- Porting the new kinds to `oet`.
 
 ## Tests
 
