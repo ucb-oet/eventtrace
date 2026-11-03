@@ -82,8 +82,9 @@ message Segment {
   uint64 from = 1;
   // Index into its type's stages.
   uint32 stage = 2;
-  // How many cycles, counting from `from`, the object was held in the stage: every cycle but the last, in which it
-  // moves on. 0 for the stage of an object still live when the trace ends.
+  // Count of explicitly blocked cycles starting at `from`, clipped to this segment's end or the trace's end.
+  // Consecutive segments may name the same stage: a display boundary can mark the start of blocking without
+  // a stage transition. 0 means no blocked prefix; stage residence alone does not imply blocking.
   uint64 held = 3;
 }
 

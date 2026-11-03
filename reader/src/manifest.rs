@@ -19,6 +19,12 @@ pub struct Manifest {
     pub objects: Vec<ObjectSchema>,
     pub enums: Vec<EnumSchema>,
     pub sites: Vec<Site>,
+    /// Native counter declarations; absent in hardware manifests.
+    #[serde(default)]
+    pub counters: Vec<CounterSchema>,
+    /// Per-object instruction labels, keyed by an encoded instruction field.
+    #[serde(default)]
+    pub instruction_text: HashMap<String, InstructionText>,
 
     /// SHA-256 of the manifest's bytes, in hex, which a trace's header must carry.
     #[serde(skip)]
@@ -29,6 +35,19 @@ pub struct Manifest {
     /// Each enum's variant names by value.
     #[serde(skip)]
     variants: HashMap<String, HashMap<u64, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CounterSchema {
+    pub event: String,
+    pub value: String,
+    pub keys: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstructionText {
+    pub field: String,
+    pub values: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,7 +157,7 @@ pub struct Site {
     pub event_name: String,
     pub instance: String,
     pub source: String,
-    /// Whether the site's records find their subject blocked.
+    /// Starts blocking in the current stage; a stage change or termination clears it.
     #[serde(default)]
     pub blocks: bool,
 }
@@ -174,6 +193,12 @@ impl Manifest {
     /// The event a site emits, as an index into `events`.
     pub fn site_event(&self, site_id: u32) -> Option<usize> {
         self.site_events.get(site_id as usize).copied().flatten()
+    }
+
+    /// Native instruction text; numeric bits remain available in the event.
+    pub fn instruction_label(&self, object: &str, get: impl FnOnce(&str) -> Option<u64>) -> Option<&str> {
+        let labels = self.instruction_text.get(object)?;
+        labels.values.get(&get(&labels.field)?.to_string()).map(String::as_str)
     }
 
     /// The name of an enum's variant with this value.

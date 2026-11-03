@@ -28,9 +28,12 @@ message TrackDescriptor {
   optional uint64 uuid = 1;
   optional string name = 2;  // in upstream's oneof static_or_dynamic_name
   optional uint64 parent_uuid = 5;
+  optional CounterDescriptor counter = 8;
   optional ChildTracksOrdering child_ordering = 11;
   optional int32 sibling_order_rank = 12;
 }
+
+message CounterDescriptor {}
 
 message TrackEvent {
   enum Type {
@@ -46,6 +49,8 @@ message TrackEvent {
   optional Type type = 9;
   optional uint64 track_uuid = 11;
   optional string name = 23;  // in upstream's oneof name_field
+  optional int64 counter_value = 30;
+  optional double double_counter_value = 44;
   repeated fixed64 flow_ids = 47;
   repeated fixed64 terminating_flow_ids = 48;
 }

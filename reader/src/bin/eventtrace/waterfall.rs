@@ -7,8 +7,8 @@
 //! normally, and the field naming its parent. Rows are in parent order: objects created before the trace begins
 //! first, by type and ID, then the others in the order they were created; each followed by its children, the objects
 //! naming it as their parent, in the same order. An object whose parent is not in the file is a root. An object set
-//! to a stage at cycle c is in it from cycle c+1, and one destroyed at cycle c leaves after cycle c; it is held in a
-//! stage for every cycle but the last, in which it moves on. An object created at cycle c is drawn in c only in the
+//! to a stage at cycle c is in it from cycle c+1, and one destroyed at cycle c leaves after cycle c. Stage residence
+//! lasts until a later transition and does not imply blocking. An object created at cycle c is drawn in c only in the
 //! stage the view gives its create event, which the stage it enters continues when the two are the same. A row's
 //! fields are the object's const fields, as its create event set them, or, with a manifest that does not list the
 //! object's fields, every field its create event set; the stage is left out either way.
@@ -201,7 +201,7 @@ fn convert<W: Write>(
         let mut event = pb::Event { cycle: e.cycle, site: e.site_id, ..Default::default() };
         if lifecycle == Some(Lifecycle::Create) {
             if let Some(&stage) = d.created_in.get(schema.short_name()) {
-                row.segments.push(pb::Segment { from: e.cycle, stage, held: 0 });
+                row.segments.push(pb::Segment { from: e.cycle, stage, ..Default::default() });
             }
         }
         if lifecycle.is_some_and(Lifecycle::ends) {
@@ -217,7 +217,11 @@ fn convert<W: Write>(
             event.effect = Some(Effect::Enters(stage));
             // A create cycle's segment in the same stage continues into the next cycle.
             if row.segments.last().is_none_or(|s| s.from != e.cycle || s.stage != stage) {
-                row.segments.push(pb::Segment { from: e.cycle + 1, stage, held: 0 });
+                if let Some(last) = row.segments.last_mut().filter(|s| s.from == e.cycle + 1) {
+                    last.stage = stage;
+                } else {
+                    row.segments.push(pb::Segment { from: e.cycle + 1, stage, ..Default::default() });
+                }
             }
         } else {
             event.effect = Some(Effect::Observes(true));
@@ -288,7 +292,9 @@ fn convert<W: Write>(
         for name in d.view.label.fields() {
             row.label.push(fields.get(name).map_or(0, |&(field, value)| texts.get(&text_of(field, value))));
         }
-        if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
+        if let Some(label) = manifest.instruction_label(key.object_type, |f| fields.get(f).and_then(|(_, v)| v.unsigned())) {
+            row.label.push(texts.get(label));
+        } else if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
             let bits = fields.get(dis.bits.as_str()).and_then(|(_, v)| v.unsigned());
             let pc = fields.get(dis.pc.as_str()).and_then(|(_, v)| v.unsigned());
             row.label.push(match (bits, pc) {
@@ -296,12 +302,38 @@ fn convert<W: Write>(
                 _ => 0,
             });
         }
-        // Held: every cycle in a stage but the last. The last stage of an object still live has no known last cycle.
-        for i in 0..row.segments.len() {
-            let to = row.segments.get(i + 1).map(|next| next.from).or(row.end);
-            let from = row.segments[i].from;
-            row.segments[i].held = to.map_or(0, |to| to.saturating_sub(from).saturating_sub(1));
+        // Reassigning the same stage does not begin another residence or clear a stall.
+        let mut segments: Vec<pb::Segment> = Vec::new();
+        for segment in row.segments.drain(..) {
+            if row.end.is_some_and(|end| segment.from >= end) { continue; }
+            if segments.last().is_none_or(|previous| previous.stage != segment.stage) {
+                segments.push(segment);
+            }
         }
+        // A blocked suffix is represented by another display segment of the same
+        // stage, whose held prefix covers the remaining residence. This uses v1
+        // unchanged; only actual stage changes clear a stall.
+        let mut displayed = Vec::new();
+        for (i, segment) in segments.iter().enumerate() {
+            let to = segments.get(i + 1).map(|s| s.from).or(row.end).unwrap_or(last.unwrap_or(0) + 1);
+            // A block observes this cycle. The edge that makes progress is the
+            // final cycle of the residence, and is not itself held. An open wait
+            // has no such progress edge and extends through the recorded window.
+            let closes = i + 1 < segments.len() || row.end.is_some();
+            let held_to = if closes { to.saturating_sub(1) } else { to };
+            let blocked_from = row.events.iter()
+                .filter(|e| manifest.sites[e.site as usize].blocks)
+                .map(|e| e.cycle)
+                .find(|&from| from >= segment.from && from < held_to);
+            match blocked_from {
+                Some(from) => {
+                    if from > segment.from { displayed.push(segment.clone()); }
+                    displayed.push(pb::Segment { from, stage: segment.stage, held: held_to - from });
+                }
+                None => displayed.push(segment.clone()),
+            }
+        }
+        row.segments = displayed;
     }
 
     file.rows = order.iter().map(|key| rows.swap_remove(key).unwrap()).collect();

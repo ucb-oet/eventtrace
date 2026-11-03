@@ -6,7 +6,7 @@ The reader is the `eventtrace` command, in `reader/`, written in Rust. Build it 
 cargo build --release --manifest-path reader/Cargo.toml
 ```
 
-Every subcommand takes the design's manifest and a trace, which may be a file or a named pipe. It refuses a trace whose
+Every subcommand takes the design's manifest and a trace, which may be a file or a named pipe. Plain and gzip-compressed traces are detected by their bytes, regardless of filename. It refuses a trace whose
 header names a different manifest.
 
 | Command | Output |
@@ -96,3 +96,14 @@ order: each object is followed by its children, the objects that name it as thei
 `waterfall.proto`, of which `reader/proto/waterfall.proto` is a copy. Open it in illilouette.
 
 A row's fields are the object's `const` fields, as its create event set them.
+
+Native producers may supply instruction labels and counter declarations in the manifest; `perfetto` exports those counters on separate tracks. See [the format](formats.md#optional-native-metadata).
+
+Waterfall format remains version 1. `Segment.held` counts explicitly blocked
+cycles from the start of that display segment. Stage residence alone does not
+imply blocking. A stall that starts partway through a stage introduces a display
+segment with the same stage ID; it does not create a stage-change event. Actual
+stage changes and object termination clear blocking. Blocking observations hatch
+their own cycle; the cycle that makes the transition or ends the object is not
+held. Repeated blocking events coalesce, and a wait still active at trace end is drawn through the recorded
+window. Existing viewers can read these files without an update.

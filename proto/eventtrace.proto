@@ -5,7 +5,7 @@
 // The first Record is a Header; each later one holds the events of one cycle that had any.
 //
 // An object is its type and ID: an event's subject has the type the manifest gives the event, and each type counts
-// IDs from 0, never reusing one. An object's events are those with it as their subject. It lives from the event the
+// IDs from 0, never reusing one; native producers may supply sparse IDs instead. An object's events are those with it as their subject. It lives from the event the
 // manifest marks as its create to the one marked as its destroy, or to the end of the trace if it has none. An Id
 // field names another object, of the type the manifest gives the field.
 //

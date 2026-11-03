@@ -49,6 +49,18 @@ path, and its source location. A site whose records find their subject blocked h
 {"site_id": 0, "event_name": "fetch.lookup", "instance": "TestHarness.chiptop0.system.tile_prci_domain.element_reset_domain.rockettile.frontend", "source": "generators/rocket-chip/src/main/scala/rocket/Frontend.scala:399"}
 ```
 
+`blocks: true` observes blocking during the event's own cycle `c`. Unlike an
+object-field assignment, this observation is not delayed to `c+1`. Emit once on
+entering a wait, or when its cause changes; repeated observations coalesce.
+Blocking clears on an actual change of the view's stage field or on object
+termination. Reassigning the same stage leaves it active. The cycle containing
+the stage-changing or ending event is the progress/departure cycle and is not
+counted as held; its field/lifetime effects still take effect from `c+1`.
+For example, blocking observed at 3 and issue at 6 yields held cycles 3, 4, 5,
+with the next stage starting at 7. No separate resume event is required. A wait
+without a closing transition is drawn through the recorded window. This rule is
+shared by all producers.
+
 ## The trace
 
 A trace is a sequence of protobuf `Record` messages, each preceded by its length as a varint, as in protobuf's
@@ -70,7 +82,7 @@ Event IDs are not stored. Events are numbered from 0 in the order the trace hold
 
 ## What a trace means
 
-- An object is its type and ID. Each type counts IDs from 0 and never reuses one.
+- An object is its type and ID. IDs are unsigned 64-bit values, unique within their object type for the recording. The Chisel runtime allocates them from 0; native models supply their own IDs, which may be sparse.
 - An object lives from the event that the manifest marks as its `create` to the one marked as `complete` or `abort`,
   or to the end of the trace if it has none. Its events are those with it as their subject.
 - An event at cycle c sees the state from before clock edge c. Its effects, such as creating or ending its
@@ -81,3 +93,30 @@ Event IDs are not stored. Events are numbered from 0 in the order the trace hold
 - A trace may hold only a window of the simulation. Objects keep the IDs they had from the start of the simulation,
   and an object created before the window appears without its create event, so a reader only knows the fields that
   later events give.
+
+## Optional native metadata
+
+Native SDK manifests may additionally declare `counters` and `instruction_text`.
+These are optional and do not change `eventtrace.proto` or its version.
+
+```json
+{
+  "counters": [
+    {"event": "RegisterTrace.write", "value": "value", "keys": ["regfile", "index"]}
+  ],
+  "instruction_text": {
+    "instruction": {"field": "bits", "values": {"19": "addi x0, x0, 0"}}
+  }
+}
+```
+
+A counter is a subjectless numeric event. Its event, emitting scope, and ordered
+key values identify a Perfetto counter track. Its value is plotted at the event's
+cycle. Raw unsigned values retain all 64 bits; Perfetto counter plotting uses
+floating point for values above signed 64-bit range.
+
+Instruction text maps an unsigned field value (decimal JSON key) to a label for
+one object type. The producer declares the table before recording, for example
+from the loaded program. The converters append it to labels and Perfetto slice
+arguments. Missing entries retain the numeric fields and use the configured
+RISC-V decoder when available. Hardware manifests need neither extension.
