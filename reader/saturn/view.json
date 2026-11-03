@@ -8,6 +8,7 @@
   },
   {
     "object": "instruction",
+    "focus": true,
     "tracks": "stage",
     "label": "pc",
     "hide": ["retire"],

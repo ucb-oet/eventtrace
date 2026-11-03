@@ -62,9 +62,33 @@ impl<W: Write> Writer<W> {
             parent_uuid: parent,
             child_ordering: explicit_children.then_some(pb::track_descriptor::ChildTracksOrdering::Explicit as i32),
             sibling_order_rank: rank,
+            ..Default::default()
         };
         self.packet(pb::TracePacket { track_descriptor: Some(descriptor), ..Default::default() })?;
         Ok(uuid)
+    }
+
+    fn counter_track(&mut self, name: String, parent: u64) -> Result<u64> {
+        let uuid = self.next_uuid;
+        self.next_uuid += 1;
+        let descriptor = pb::TrackDescriptor {
+            uuid: Some(uuid), name: Some(name), parent_uuid: Some(parent),
+            counter: Some(pb::CounterDescriptor {}), ..Default::default()
+        };
+        self.packet(pb::TracePacket { track_descriptor: Some(descriptor), ..Default::default() })?;
+        Ok(uuid)
+    }
+
+    fn counter(&mut self, cycle: u64, track: u64, value: Value) -> Result<()> {
+        let mut event = pb::TrackEvent {
+            r#type: Some(Type::Counter as i32), track_uuid: Some(track), ..Default::default()
+        };
+        match value {
+            Value::Signed(v) => event.counter_value = Some(v),
+            Value::Unsigned(v) if v <= i64::MAX as u64 => event.counter_value = Some(v as i64),
+            Value::Unsigned(v) => event.double_counter_value = Some(v as f64),
+        }
+        self.packet(pb::TracePacket { timestamp: Some(cycle), track_event: Some(event), ..Default::default() })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -88,6 +112,7 @@ impl<W: Write> Writer<W> {
             name,
             flow_ids: flows,
             terminating_flow_ids: terminating,
+            ..Default::default()
         };
         self.packet(pb::TracePacket { timestamp: Some(cycle), track_event: Some(event), ..Default::default() })
     }
@@ -184,7 +209,9 @@ fn begin<'a, W: Write>(
     let mut created: Vec<(String, String)> = Vec::new();
     if let Some(create) = objects.create_event(&key) {
         created = fields(manifest, create).into_iter().filter(|(name, _)| *name != d.view.tracks).collect();
-        if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
+        if let Some(label) = manifest.instruction_label(object, |f| create.get(manifest, f).and_then(Value::unsigned)) {
+            created.push(("asm".to_string(), label.to_string()));
+        } else if let (Some(dis), Some(dasm)) = (&d.view.disassemble, d.dasm.as_mut()) {
             let bits = create.get(manifest, &dis.bits).and_then(Value::unsigned);
             let pc = create.get(manifest, &dis.pc).and_then(Value::unsigned);
             if let (Some(bits), Some(pc)) = (bits, pc) {
@@ -266,6 +293,20 @@ fn convert<W: Write>(
         drawn.insert(object, Drawn { view, track_field, created_in, resources, dasm });
     }
 
+    let counter_schemas: HashMap<usize, _> = manifest.counters.iter().map(|c| {
+        let index = manifest.events.iter().position(|e| e.name == c.event)
+            .ok_or_else(|| Error(format!("counter event {} is not in the manifest", c.event)))?;
+        let schema = &manifest.events[index];
+        if schema.subject.is_some() || !schema.fields.iter().any(|f| f.name == c.value)
+            || c.keys.iter().any(|key| !schema.fields.iter().any(|f| &f.name == key)) {
+            return Err(Error(format!("counter {} has an invalid value or key field", c.event)));
+        }
+        Ok((index, c))
+    }).collect::<Result<_>>()?;
+    let mut counter_tracks = HashMap::new();
+    let counter_parent = if counter_schemas.is_empty() { None } else {
+        Some(writer.track("Counters".to_string(), None, None, true)?)
+    };
     let mut objects = Objects::new(manifest);
     let mut slices: IndexMap<Key, Slice> = IndexMap::new();
     let mut next_flow = 1;
@@ -275,10 +316,31 @@ fn convert<W: Write>(
         let cycle = cycle?;
         last = cycle.cycle;
         // Every event of a cycle sees the state before its clock edge; their changes start at the next cycle.
-        let mut ends: Vec<(Key, Option<&str>)> = Vec::new();
+        let mut ends: IndexMap<Key, Option<&str>> = IndexMap::new();
         let mut creates: Vec<(Key, Value, Vec<u64>)> = Vec::new();
-        let mut begins: Vec<(Key, Value, Vec<u64>)> = Vec::new();
+        let mut begins: IndexMap<Key, (Value, Vec<u64>)> = IndexMap::new();
         for e in &cycle.events {
+            if let Some(counter) = counter_schemas.get(&e.event) {
+                let keys = counter.keys.iter().map(|key| {
+                    let field = manifest.events[e.event].fields.iter().find(|f| &f.name == key).unwrap();
+                    e.get(manifest, key).map(|v| text::value(manifest, field, v).to_string())
+                        .ok_or_else(|| Error(format!("counter {} has an absent key {key}", counter.event)))
+                }).collect::<Result<Vec<_>>>()?;
+                let scope = manifest.sites.iter().find(|s| s.site_id == e.site_id).map(|s| s.instance.as_str()).unwrap_or("");
+                let key = (e.event, scope.to_string(), keys.clone());
+                let track = match counter_tracks.get(&key) {
+                    Some(&track) => track,
+                    None => {
+                        let suffix = if keys.is_empty() { counter.event.clone() } else { keys.join(".") };
+                        let track = writer.counter_track(format!("{scope} {suffix}"), counter_parent.unwrap())?;
+                        counter_tracks.insert(key, track);
+                        track
+                    }
+                };
+                let value = e.get(manifest, &counter.value)
+                    .ok_or_else(|| Error(format!("counter {} has an absent value", counter.event)))?;
+                writer.counter(cycle.cycle, track, value)?;
+            }
             let Some(key) = Key::subject(manifest, e) else { continue };
             let Some(d) = drawn.get(key.object_type) else { continue };
             let schema = &manifest.events[e.event];
@@ -309,20 +371,25 @@ fn convert<W: Write>(
                 writer.event(cycle.cycle, Type::Instant, track, Some(schema.short_name().to_string()), args, vec![], flows)?;
             }
             if destroys {
-                ends.push((key, Some(schema.short_name())));
+                ends.insert(key, Some(schema.short_name()));
             } else if let Some(stage) = created {
                 // Its create cycle, whose slice the value it enters continues if the same.
                 creates.push((key, stage, flows));
                 if let Some(value) = value.filter(|&value| value != stage) {
-                    ends.push((key, None));
-                    begins.push((key, value, vec![]));
+                    ends.entry(key).or_insert(None);
+                    begins.insert(key, (value, vec![]));
                 }
             } else if let Some(value) = value {
-                if slices.contains_key(&key) {
-                    ends.push((key, None));
-                }
-                begins.push((key, value, flows));
+                ends.entry(key).or_insert(None);
+                let entry = begins.entry(key).or_insert((value, vec![]));
+                entry.0 = value;
+                entry.1.extend(flows);
             }
+        }
+        // All updates take effect together. The last stage assignment determines
+        // the next cycle's interval; an ending event takes precedence.
+        for (key, how) in &ends {
+            if how.is_some() { begins.shift_remove(key); }
         }
         objects.commit(&cycle);
         for (key, value, flows) in creates {
@@ -336,7 +403,7 @@ fn convert<W: Write>(
                 drawn.get_mut(key.object_type).unwrap().resources.release(slice.value, slice.lane);
             }
         }
-        for (key, value, flows) in begins {
+        for (key, (value, flows)) in begins {
             let d = drawn.get_mut(key.object_type).unwrap();
             begin(&mut writer, manifest, d, &objects, &mut slices, key, value, cycle.cycle + 1, flows)?;
         }

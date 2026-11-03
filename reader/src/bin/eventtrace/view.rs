@@ -21,6 +21,8 @@
 //! - created_in, optional: for create events of the object, the stage it is in during the cycle the event fires, a
 //!   variant of the tracks field's enum, as in {"decode": "Decode"}. A stage set at cycle c holds from c+1, so without
 //!   it an object's create cycle is drawn in no stage.
+//! - focus, optional: true for the object type in focus when a waterfall file opens, drawn in full, such as
+//!   instruction. At most one view may set it; without one, the first type is in focus.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -38,6 +40,8 @@ pub struct View {
     pub disassemble: Option<Disassemble>,
     /// By create event's short name, the variant of the tracks field's enum its object is in during that event's cycle.
     pub created_in: HashMap<String, String>,
+    /// Whether the type is in focus when a waterfall file opens.
+    pub focus: bool,
 }
 
 /// One view as the file writes it, with its object type optional.
@@ -53,6 +57,8 @@ struct Written {
     disassemble: Option<Disassemble>,
     #[serde(default)]
     created_in: HashMap<String, String>,
+    #[serde(default)]
+    focus: bool,
 }
 
 /// One label field or several.
@@ -115,6 +121,10 @@ pub fn load(path: &Path, manifest: &Manifest) -> Result<Vec<View>> {
     for view in &views {
         check(view, manifest)?;
     }
+    let focused: Vec<&str> = views.iter().filter(|v| v.focus).map(|v| v.object.as_str()).collect();
+    if focused.len() > 1 {
+        return Err(Error(format!("{}: only one view may be in focus, not {}", path.display(), focused.join(", "))));
+    }
     Ok(views)
 }
 
@@ -127,6 +137,7 @@ impl Written {
             hide: self.hide,
             disassemble: self.disassemble,
             created_in: self.created_in,
+            focus: self.focus,
         }
     }
 }

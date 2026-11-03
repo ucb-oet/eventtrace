@@ -97,7 +97,7 @@ struct Replay {
 }
 
 /// Replays the records cycle by cycle, checking each event against the stages of the instructions before the edge.
-fn replay(manifest: &Manifest, events: Events<std::fs::File>, problems: &mut Vec<String>) -> Result<Replay> {
+fn replay(manifest: &Manifest, events: Events<impl std::io::Read>, problems: &mut Vec<String>) -> Result<Replay> {
     let mut replay = Replay::default();
     let mut live: HashMap<u64, &'static str> = HashMap::new();
     let mut decoded: HashMap<u64, (u64, u64)> = HashMap::new();

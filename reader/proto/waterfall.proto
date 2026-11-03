@@ -1,5 +1,5 @@
 // A copy of illilouette's proto/waterfall.proto, which illilouette owns: the format of the files that
-// `eventtrace waterfall` writes for its viewer. Copied from illilouette's commit 13c5a1d. illilouette keeps its
+// `eventtrace waterfall` writes for its viewer. Copied from illilouette's commit fb32515. illilouette keeps its
 // field numbers stable, so a copy that lags it still writes files the viewer reads.
 //
 // The waterfall file: what a post-processor writes from an EventTrace trace, its manifest, and the design's view
@@ -26,6 +26,9 @@ message Waterfall {
   repeated Type types = 7;
   // In display order.
   repeated Row rows = 8;
+  // Index into types of the type in focus when the file opens, drawn in full, as the design's view names it, such as
+  // "instruction"; 0, the first type, when the view names none.
+  uint32 focus = 9;
 }
 
 // Where events are emitted. Texts by index.
@@ -79,8 +82,9 @@ message Segment {
   uint64 from = 1;
   // Index into its type's stages.
   uint32 stage = 2;
-  // How many cycles, counting from `from`, the object was held in the stage: every cycle but the last, in which it
-  // moves on. 0 for the stage of an object still live when the trace ends.
+  // Count of explicitly blocked cycles starting at `from`, clipped to this segment's end or the trace's end.
+  // Consecutive segments may name the same stage: a display boundary can mark the start of blocking without
+  // a stage transition. 0 means no blocked prefix; stage residence alone does not imply blocking.
   uint64 held = 3;
 }
 

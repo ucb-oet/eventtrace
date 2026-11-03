@@ -2,7 +2,8 @@
 //! stream is read as it arrives, so a trace may come through a pipe.
 
 use std::fs::File;
-use std::io::{BufReader, ErrorKind, Read};
+use std::io::{BufReader, Cursor, ErrorKind, Read};
+use flate2::read::MultiGzDecoder;
 use std::path::Path;
 
 use prost::Message;
@@ -78,11 +79,24 @@ pub struct Events<'m, R> {
     next_id: u64,
 }
 
-impl<'m> Events<'m, File> {
+impl<'m> Events<'m, Box<dyn Read>> {
     /// The events of the trace at `path`, which may be a file or a named pipe.
     pub fn open(manifest: &'m Manifest, path: &Path) -> Result<Self> {
         let file = File::open(path).map_err(|e| Error(format!("cannot open {}: {e}", path.display())))?;
-        Events::new(manifest, file, path.display().to_string())
+        let mut input = BufReader::new(file);
+        // A pipe may deliver the gzip magic one byte at a time.
+        let mut magic = [0u8; 2];
+        let mut size = 0;
+        while size < magic.len() {
+            let n = input.read(&mut magic[size..])
+                .map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
+            if n == 0 { break; }
+            size += n;
+        }
+        let gzip = size == 2 && magic == [0x1f, 0x8b];
+        let input = Cursor::new(magic[..size].to_vec()).chain(input);
+        let input: Box<dyn Read> = if gzip { Box::new(MultiGzDecoder::new(input)) } else { Box::new(input) };
+        Events::new(manifest, input, path.display().to_string())
     }
 }
 
