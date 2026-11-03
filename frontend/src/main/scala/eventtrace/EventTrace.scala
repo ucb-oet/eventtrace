@@ -31,6 +31,9 @@ import scala.util.DynamicVariable
 object EventTrace {
   type ObjectType = eventtrace.ObjectType
   type Collection[T <: eventtrace.ObjectType] = eventtrace.Collection[T]
+  type Queue[T <: eventtrace.ObjectType] = eventtrace.Queue[T]
+  type Rob[T <: eventtrace.ObjectType] = eventtrace.Rob[T]
+  type MapCollection[T <: eventtrace.ObjectType] = eventtrace.MapCollection[T]
 
   /** Each field decodes into a C++ scalar, so it is at most this wide; a payload may span any number of words. */
   val MaxFieldBits = 64
@@ -84,8 +87,14 @@ object EventTrace {
 
   private val openEvent = new DynamicVariable[Option[OpenEvent]](None)
 
-  /** The member handle of the `iter` block whose body is running. */
-  private val openIter = new DynamicVariable[Option[ObjectType]](None)
+  /** An `iter` block whose body is running: its member handle, and for the block of a `rollback` or `clear`, the
+    * queue its member leaves and the number of events the block has declared so far.
+    */
+  private class OpenIter(val member: ObjectType, val leaves: Option[CollectionInfo]) {
+    var events = 0
+  }
+
+  private val openIter = new DynamicVariable[Option[OpenIter]](None)
 
   /** The tests gating the sites declared now, outermost first. */
   private val openGuards = new DynamicVariable[Seq[Guard]](Seq.empty)
@@ -157,18 +166,56 @@ object EventTrace {
     * collection; modules share one by passing it, as a constructor parameter or through a `Parameters` key bound in
     * the parent.
     */
-  def collection[T <: ObjectType](gen: => T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Collection[T] = {
+  def collection[T <: ObjectType](gen: => T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Collection[T] =
+    new Collection(declare(gen, CollectionKind.Set, name.value, sourceInfo), () => gen)
+
+  /** Declares a queue of objects of `gen`'s type in the current module, with no capacity: members join at the tail
+    * and leave from the head, or all at once. It is shared as a collection is.
+    */
+  def queue[T <: ObjectType](gen: => T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Queue[T] =
+    new Queue(declare(gen, CollectionKind.Queue(0), name.value, sourceInfo), () => gen)
+
+  /** Declares a queue that holds at most `entries` members at the end of each cycle. */
+  def queue[T <: ObjectType](gen: => T, entries: Int)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Queue[T] = {
+    if (entries < 1) elaborationError(s"queue ${name.value} has $entries entries; a queue has at least 1", sourceInfo)
+    new Queue(declare(gen, CollectionKind.Queue(entries), name.value, sourceInfo), () => gen)
+  }
+
+  /** Declares a ROB of objects of `gen`'s type in the current module: a queue of at most `entries` members whose tail
+    * allocates keys, as a reorder buffer's tail allocates tags. Keys count modulo `keys`, the size of the tag space:
+    * 32 for 16 entries tagged with a wrap bit, or `entries` for tags without one.
+    */
+  def rob[T <: ObjectType](gen: => T, entries: Int, keys: Int)(implicit name: sourcecode.Name, sourceInfo: SourceInfo)
+    : Rob[T] = {
+    if (entries < 1) elaborationError(s"ROB ${name.value} has $entries entries; a ROB has at least 1", sourceInfo)
+    if (keys < entries)
+      elaborationError(s"ROB ${name.value} has $keys keys for $entries entries; it needs a key for each entry", sourceInfo)
+    new Rob(declare(gen, CollectionKind.Rob(entries, keys), name.value, sourceInfo), () => gen)
+  }
+
+  /** Declares a map of objects of `gen`'s type in the current module: members under keys below `entries` that the
+    * hardware chooses, as from a free list.
+    */
+  def map[T <: ObjectType](gen: => T, entries: Int)(implicit name: sourcecode.Name, sourceInfo: SourceInfo)
+    : MapCollection[T] = {
+    if (entries < 1) elaborationError(s"map ${name.value} has $entries entries; a map has at least 1", sourceInfo)
+    new MapCollection(declare(gen, CollectionKind.Map(entries), name.value, sourceInfo), () => gen)
+  }
+
+  /** Registers a collection of `kind` holding objects of `gen`'s type, declared as `valName` in the current module. */
+  private def declare(gen: => ObjectType, kind: CollectionKind, valName: String, sourceInfo: SourceInfo): CollectionInfo = {
     val module = Module.currentModule.getOrElse(
       elaborationError(
-        s"collection ${name.value} is declared outside a module; declare it in a module and pass it to the others",
+        s"collection $valName is declared outside a module; declare it in a module and pass it to the others",
         sourceInfo
       )
     )
+    // An object type builds Chisel types, so it is constructed only once the declaration is known to be in a module.
     val sample = gen
     registerObjectType(sample, sourceInfo)
-    val info = new CollectionInfo(collections.length, sample.typeName, module, name.value)
+    val info = new CollectionInfo(collections.length, sample.typeName, module, valName, kind)
     collections += info
-    new Collection(info, () => gen)
+    info
   }
 
   /** Creates an object of `gen`'s type on every clock edge at which the enclosing `when` conditions hold, as the create
@@ -200,13 +247,34 @@ object EventTrace {
   }
 
   /** Runs an `iter` block with `member` standing for every member of `view`; see [[View.iter]]. */
-  private[eventtrace] def iter[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit = if (tracing) {
-    if (openIter.value.isDefined) elaborationError("iter is nested inside another iter block, which is not supported", sourceInfo)
+  private[eventtrace] def iter[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit =
+    if (tracing) runIter("iter", view, member, None, sourceInfo)(body)
+
+  /** Runs the block of a queue's `clear` or a ROB's `rollback`, `what`, as an `iter` block over `view`, the members
+    * that leave. Its one event carries each member's removal.
+    */
+  private[eventtrace] def leaving[T <: ObjectType](view: ViewExpr, member: T, what: String, sourceInfo: SourceInfo)(
+    body: T => Unit
+  ): Unit = if (tracing) {
+    val iter = runIter(what, view, member, Some(view.collection), sourceInfo)(body)
+    if (iter.events != 1)
+      elaborationError(
+        s"$what's block declares ${iter.events} events; it must hold exactly one event on its member, which carries " +
+          "the member's removal",
+        sourceInfo
+      )
+  }
+
+  private def runIter[T <: ObjectType](what: String, view: ViewExpr, member: T, leaves: Option[CollectionInfo],
+    sourceInfo: SourceInfo)(body: T => Unit): OpenIter = {
+    if (openIter.value.isDefined) elaborationError(s"$what is nested inside another iter block, which is not supported", sourceInfo)
     if (openEvent.value.isDefined)
-      elaborationError("iter is inside an event block; put the events inside the iter block instead", sourceInfo)
+      elaborationError(s"$what is inside an event block; put the events inside the $what block instead", sourceInfo)
+    val iter = new OpenIter(member, leaves)
     member.binding = Binding.IterMember(view, open = true)
-    try openIter.withValue(Some(member))(body(member))
+    try openIter.withValue(Some(iter))(body(member))
     finally member.binding = Binding.IterMember(view, open = false)
+    iter
   }
 
   /** Gates the sites declared in `body` on a test of a view's size, which the runtime evaluates against the state
@@ -330,8 +398,8 @@ object EventTrace {
     body: => Unit
   ): Unit = {
     if (openEvent.value.isDefined) elaborationError(s"$what is nested inside another event", sourceInfo)
-    openIter.value.foreach { member =>
-      if (!subject.exists(_ eq member))
+    openIter.value.foreach { iter =>
+      if (!subject.exists(_ eq iter.member))
         elaborationError(s"$what is inside an iter block, which may hold only events on its member", sourceInfo)
     }
     val guards = openGuards.value
@@ -343,6 +411,11 @@ object EventTrace {
     val enable = computingEnable.withValue(true)(when.cond)
     val module = Module.currentModule.getOrElse(elaborationError(s"$what is outside a module", sourceInfo))
     val open = OpenEvent(name, subject, created, module, WhenDepth(), mutable.ArrayBuffer.empty, mutable.ArrayBuffer.empty)
+    // The event in the block of a rollback or clear carries its member's removal from that queue.
+    openIter.value.foreach { iter =>
+      iter.leaves.foreach(info => open.effects += Effect.Drop(info))
+      iter.events += 1
+    }
     openEvent.withValue(Some(open))(body)
     val entries = open.entries
     val lifecycle =
@@ -366,7 +439,11 @@ object EventTrace {
     val resolved = Option.when(subject.isDefined || refs.nonEmpty || guards.nonEmpty)(
       handles(what, open, subject.toSeq ++ refs ++ tested.flatMap(Queries.handles), tested, sourceInfo)
     )
-    val queryValues = resolved.toSeq.flatMap(_._2)
+    // A ROB's or map's key travels in the payload too, after the values its queries compare with.
+    val keys = open.effects.toSeq.collect { case Effect.Add(_, Some(h: Operand.Hardware)) => h }
+    val queryValues = resolved.toSeq.flatMap(_._2).foldLeft(Seq.empty[Operand.Hardware]) { (vs, v) =>
+      if (vs.exists(_ eq v)) vs else vs :+ v
+    } ++ keys
     val packed = entries.collect { case Entry(field, Hardware(value), Some(t), _, _) => (field, value, t.width) }
     val offsets = packed.map(_._1).zip(packed.scanLeft(0)(_ + _._3)).toMap
     val operandOffsets = queryValues.zip(queryValues.scanLeft(packed.map(_._3).sum)(_ + _.tpe.width))
@@ -424,7 +501,13 @@ object EventTrace {
     roots.foreach(visit)
     val ordered = seen.values.toSeq.sortBy(_.serial)
     val values = mutable.ArrayBuffer.empty[Operand.Hardware]
-    (ordered.flatMap(viewOf) ++ tested).flatMap(Queries.hardware).foreach { v => if (!values.exists(_ eq v)) values += v }
+    val chosenBy = ordered.flatMap(h => h.binding match {
+      case Binding.Chosen(_, chooser, _) => Queries.hardware(chooser)
+      case _                             => Nil
+    })
+    ((ordered.flatMap(viewOf) ++ tested).flatMap(Queries.hardware) ++ chosenBy).foreach { v =>
+      if (!values.exists(_ eq v)) values += v
+    }
     values.foreach { v =>
       if (!(v.module eq open.module))
         elaborationError(
@@ -524,6 +607,23 @@ object EventTrace {
     checkHandle(what, handle, sourceInfo)
     subjectEvent(what, handle, sourceInfo).effects += effect
   }
+
+  /** Records `pop()` on the open event's subject, `what`, which must have the type `info` holds. */
+  private[eventtrace] def subjectEffect(made: Effect, info: CollectionInfo, what: String, sourceInfo: SourceInfo): Unit =
+    if (tracing) {
+      val open = openEvent.value.getOrElse(elaborationError(s"$what is outside an event block", sourceInfo))
+      val subject = open.subject.getOrElse(
+        elaborationError(s"""$what is in the event "${open.name}", which has no subject and so no effects""", sourceInfo)
+      )
+      if (subject.typeName != info.typeName)
+        elaborationError(
+          s"$what is in an event on an object of type ${subject.typeName}, but ${info.valName} holds ${info.typeName}",
+          sourceInfo
+        )
+      if (open.created)
+        elaborationError(s"$what is in its subject's create block, and a new object is in no queue yet", sourceInfo)
+      effect(made, subject, what, sourceInfo)
+    }
 
   /** Records the end of the open event's subject, normal for `complete` and abnormal for `abort`, and the `by` field
     * of `abort(by = ...)`: `Some(None)` for `Absent`.

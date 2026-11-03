@@ -2,8 +2,8 @@
 
 - [Overview](overview.md): what EventTrace records, its model of events, objects, and collections, and how a trace
   is produced.
-- [Writing annotations](annotations.md): events, object types, creating and changing objects, collections, queries,
-  and the rules that elaboration and the runtime check.
+- [Writing annotations](annotations.md): events, object types, creating and changing objects, collections (sets,
+  queues, ROBs, and maps), queries, and the rules that elaboration and the runtime check.
 - [Sharing collections between modules](sharing-collections.md): passing a collection to the modules that use it.
 - [Annotating SystemVerilog](systemverilog.md): tracing a SystemVerilog design through DPI calls and `oet`, the C++
   library with the same model.

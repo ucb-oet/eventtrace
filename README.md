@@ -51,7 +51,7 @@ Chipyard, reading traces, and the trace and manifest formats.
 | `proto/eventtrace.proto` | The trace format. |
 | `python/` | The standalone Python producer package and its interoperability tests. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, Sodor, and native NPU models. |
-| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. Each has a SystemVerilog version in `sv/`. |
+| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. All but `structures` have a SystemVerilog version in `sv/`. |
 | `docs/` | The documentation. |
 
 ## Use in Chipyard
@@ -86,7 +86,7 @@ Verilator). Cargo must also be installed, for the reader.
 ```sh
 make -C runtime test
 make -C systemverilog test
-make -C examples/collections check    # likewise stage0, stage1, and objects
+make -C examples/collections check    # likewise stage0, stage1, objects, and structures
 ```
 
 This directory's `build.sbt` builds the frontend and the examples on their own. It uses Chipyard's sbt launcher and

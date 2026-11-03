@@ -211,6 +211,74 @@ Each elaborated declaration is its own collection: two instances of a module get
 collection in several modules, see [Sharing collections between modules](sharing-collections.md). Error messages
 name a collection by its module's instance path and its `val` name, such as `Core.active`.
 
+### Queues, ROBs, and maps
+
+A collection from `EventTrace.collection` is a set: members join and leave in any order. Three more kinds follow the
+disciplines of hardware structures, and each checks what its operations imply. All of them take the queries below,
+and are shared between modules the same way.
+
+| Kind | Declare | Join | Leave | Find |
+|---|---|---|---|---|
+| Queue | `EventTrace.queue(new T)`, or with `entries = n` | `add(i)` | `pop()`, `clear { i => ... }` | queries |
+| ROB | `EventTrace.rob(new T, entries = n, keys = k)` | `add(key, i)` | `pop()`, `rollback(newTail) { i => ... }`, `clear { i => ... }` | queries, `rob(key)` |
+| Map | `EventTrace.map(new T, entries = n)` | `add(key, i)` | `remove(i)` | queries, `map(key)` |
+
+A **queue** is a FIFO. `add(i)` joins the tail. `pop()` removes the subject of the event it is in, which must be at the
+head: the pops of one cycle must take the first members. `clear` removes every member: its block, like an `iter`
+block, runs with a handle standing for every member and must hold exactly one event on it, which carries the removal.
+A queue declared with `entries` may hold at most that many members at the end of a cycle.
+
+```scala
+val fetchBuf = EventTrace.queue(new Insn, entries = 4)
+when (fetch) { EventTrace.create(new Insn, event = "fetch") { i => i.pc := pc; fetchBuf.add(i) } }
+when (decode) {
+  val i = fetchBuf.head
+  i.event("decode") { fetchBuf.pop() }
+}
+when (redirect) { fetchBuf.clear { i => i.event("flush") { i.abort() } } }
+```
+
+A **ROB** is a queue whose tail allocates keys, as a reorder buffer's tail allocates tags. Keys count modulo `keys`,
+the size of the tag space: 32 for 16 entries tagged with a wrap bit, or `entries` for tags without one.
+
+- `add(key, i)` joins the tail with the hardware's tag, which must be the key the tail allocates next. The first
+  addition sets where allocation starts, and several additions in one cycle allocate in site order.
+- `rob(key)` picks the live member with that key.
+- `rollback(newTail)` moves the tail back to `newTail`, the value the hardware writes into its tail pointer: the
+  members from `newTail` through the youngest leave, and allocation continues from `newTail`. `newTail` may also be
+  the key the tail allocates next, which removes nothing. Its block works as `clear`'s does.
+- `pop()` and `clear` work as on a queue.
+
+```scala
+val rob = EventTrace.rob(new Insn, entries = 8, keys = 16)
+when (dispatch) {
+  val i = fetchBuf.head
+  i.event("dispatch") { fetchBuf.pop(); rob.add(robTail, i) }
+}
+when (writeback) { rob(wbTag).event("complete") {} }
+when (mispredict) { rob.rollback(branchTag + 1.U) { i => i.event("squash") { i.abort() } } }
+when (commit) {
+  val h = rob.head
+  h.event("commit") { rob.pop(); h.complete() }
+}
+```
+
+A **map** holds members under keys the hardware chooses, as from a free list. `add(key, i)` joins under `key`, which
+must be below `entries` and free once the cycle's removals apply, so a slot can be freed and taken in one cycle.
+`map(key)` picks the member under that key, `remove(i)` removes any member, and views follow join order.
+
+```scala
+val station = EventTrace.map(new Uop, entries = 4)
+when (dispatch) { EventTrace.create(new Uop, event = "insert") { u => u.pc := pc; station.add(freeSlot, u) } }
+when (issue) {
+  val u = station(issueSlot)
+  u.event("issue") { station.remove(u); u.complete() }
+}
+```
+
+A key is a `UInt`, and a literal key must be below the keys or entries. `examples/structures` traces a small
+pipeline through all three.
+
 ## Queries
 
 A query finds the objects an event acts on. The runtime evaluates it against the state from before the clock edge.
@@ -323,9 +391,12 @@ Elaboration stops with an error that names the source line when an annotation br
 - a block never captures and assigns the same name;
 - sites that share an event name have the same fields and types, give a field the same role, and agree on creating,
   completing, and aborting;
-- effects act only on the event's subject;
+- effects act only on the event's subject, and `pop()` only on a subject of the type its queue holds;
 - handles are used only where they are valid;
-- events, `iter`, and tests do not nest in ways the library does not support;
+- events, `iter`, `clear`, `rollback`, and tests do not nest in ways the library does not support, and the block of
+  a `clear` or `rollback` holds exactly one event on its member;
+- a queue, ROB, or map has at least one entry, a ROB has at least as many keys as entries, and a literal key is below
+  them;
 - captures and query values are in the event's module;
 - object types with one name have the same fields, and enums with one simple name are the same enum.
 
@@ -335,6 +406,9 @@ Some rules depend on the simulation, so the runtime checks them as it handles ea
 
 - a chooser finds the members it needs;
 - an object joins a collection only if it is not already a member, and leaves only if it is one;
+- a cycle's pops take a queue's or ROB's first members, and a queue, ROB, or map holds no more than its entries;
+- a ROB's added key is the one its tail allocates next, and a rollback goes to a live key or the tail;
+- a map's added key is free once the cycle's removals apply;
 - a `setOnce` field is assigned only once;
 - no field is assigned by two events in one cycle;
 - an object that ends has no other effects in its last cycle, and has left every collection;

@@ -21,11 +21,112 @@ final class Collection[T <: ObjectType] private[eventtrace] (info: CollectionInf
 
   /** The subject joins this collection, last in join order, when the open event fires. */
   def add(handle: T)(implicit sourceInfo: SourceInfo): Unit =
-    EventTrace.effect(Effect.Add(info), handle, s"${info.valName}.add", sourceInfo)
+    EventTrace.effect(Effect.Add(info, None), handle, s"${info.valName}.add", sourceInfo)
 
   /** The subject leaves this collection when the open event fires. */
   def remove(handle: T)(implicit sourceInfo: SourceInfo): Unit =
     EventTrace.effect(Effect.Remove(info), handle, s"${info.valName}.remove", sourceInfo)
+}
+
+/** What a queue and a ROB share: members leave from the head, through [[pop]], or all at once, through [[clear]]. A
+  * queue is itself a view, oldest member first.
+  */
+sealed abstract class QueueBase[T <: ObjectType] private[eventtrace] (
+  private[eventtrace] val info: CollectionInfo,
+  gen: () => T) extends View[T](ViewExpr.Source(info), gen) {
+
+  /** The open event's subject leaves the head when the event fires. The pops of one cycle must take the first
+    * members, as many as there are pops; anything else is a runtime violation.
+    */
+  def pop()(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.subjectEffect(Effect.Pop(info), info, s"${info.valName}.pop()", sourceInfo)
+
+  /** Every member leaves. `body` runs once at elaboration with a handle standing for every member, as an `iter` block
+    * does, and must hold exactly one event on it, which carries the member's removal.
+    */
+  def clear(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.leaving(ViewExpr.Source(info), gen(), s"${info.valName}.clear", sourceInfo)(body)
+}
+
+/** A FIFO declared with [[EventTrace.queue]]: members join at the tail and leave from the head, or all at once.
+  *
+  * {{{
+  * val fetchBuf = EventTrace.queue(new Insn, entries = 16)
+  * EventTrace.create(new Insn, event = "fetch") { i => i.pc := pc; fetchBuf.add(i) }
+  * val h = fetchBuf.head
+  * h.event("decode") { fetchBuf.pop() }
+  * fetchBuf.clear { i => i.event("squash") { i.abort() } }
+  * }}}
+  */
+final class Queue[T <: ObjectType] private[eventtrace] (info: CollectionInfo, gen: () => T) extends QueueBase[T](info, gen) {
+
+  /** The subject joins the tail when the open event fires. */
+  def add(handle: T)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.effect(Effect.Add(info, None), handle, s"${info.valName}.add", sourceInfo)
+}
+
+/** A queue whose tail allocates keys, as a reorder buffer's tail allocates tags, declared with [[EventTrace.rob]].
+  * Members are found by key, leave from the head, and leave from the tail on a rollback.
+  *
+  * {{{
+  * val rob = EventTrace.rob(new Insn, entries = 16, keys = 32)
+  * i.event("issue") { rob.add(stag, i) }
+  * rob(cmplStag).event("complete") { ... }
+  * val h = rob.head
+  * h.event("commit") { rob.pop(); h.complete() }
+  * rob.rollback(stagFirst) { i => i.event("squash") { i.abort() } }
+  * }}}
+  */
+final class Rob[T <: ObjectType] private[eventtrace] (info: CollectionInfo, gen: () => T) extends QueueBase[T](info, gen) {
+
+  /** The subject joins the tail with `key`, the hardware's tag, when the open event fires. The key must be the one
+    * the tail allocates next, counting modulo the ROB's keys; the first addition sets where allocation starts.
+    */
+  def add(key: UInt, handle: T)(implicit sourceInfo: SourceInfo): Unit = {
+    val what = s"${info.valName}.add"
+    EventTrace.effect(Effect.Add(info, Some(Queries.key(info, key, what, sourceInfo))), handle, what, sourceInfo)
+  }
+
+  /** The live member with `key`; a runtime violation if there is none. */
+  def apply(key: UInt)(implicit sourceInfo: SourceInfo): T = Queries.byKey(info, key, gen, sourceInfo)
+
+  /** Moves the tail back to `newTail`, the value the hardware writes into its tail pointer: the members from the one
+    * with key `newTail` through the youngest leave, and allocation continues from `newTail`. `newTail` may also be
+    * the key the tail allocates next, which removes nothing; any other key is a runtime violation. `body` runs as
+    * [[clear]]'s does.
+    */
+  def rollback(newTail: UInt)(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit = {
+    val what = s"${info.valName}.rollback"
+    EventTrace.leaving(ViewExpr.From(info, Queries.key(info, newTail, what, sourceInfo)), gen(), what, sourceInfo)(body)
+  }
+}
+
+/** Members under keys the hardware chooses, as from a free list, declared with [[EventTrace.map]]. Its views follow
+  * join order.
+  *
+  * {{{
+  * val rs = EventTrace.map(new Uop, entries = 24)
+  * u.event("insert") { rs.add(slot, u) }
+  * rs(pickSlot).event("issue") { ... }
+  * }}}
+  */
+final class MapCollection[T <: ObjectType] private[eventtrace] (info: CollectionInfo, gen: () => T)
+    extends View[T](ViewExpr.Source(info), gen) {
+
+  /** The subject joins under `key` when the open event fires. The key must be below the map's entries and free once
+    * the cycle's removals apply.
+    */
+  def add(key: UInt, handle: T)(implicit sourceInfo: SourceInfo): Unit = {
+    val what = s"${info.valName}.add"
+    EventTrace.effect(Effect.Add(info, Some(Queries.key(info, key, what, sourceInfo))), handle, what, sourceInfo)
+  }
+
+  /** The subject leaves when the open event fires. */
+  def remove(handle: T)(implicit sourceInfo: SourceInfo): Unit =
+    EventTrace.effect(Effect.Remove(info), handle, s"${info.valName}.remove", sourceInfo)
+
+  /** The member under `key`; a runtime violation if there is none. */
+  def apply(key: UInt)(implicit sourceInfo: SourceInfo): T = Queries.byKey(info, key, gen, sourceInfo)
 }
 
 /** A pure query over a collection's members, evaluated by the runtime against the state before the clock edge.
@@ -228,6 +329,9 @@ private[eventtrace] object ViewExpr {
   final case class OrderBy(input: ViewExpr, member: ObjectType, key: Operand) extends ViewExpr {
     def collection: CollectionInfo = input.collection
   }
+
+  /** A ROB's members from the one with key `key` through the youngest, which a rollback removes. */
+  final case class From(collection: CollectionInfo, key: Operand) extends ViewExpr
 }
 
 /** How a handle picks one member of a view. */
@@ -238,14 +342,34 @@ private[eventtrace] object Chooser {
   case object Last extends Chooser
   final case class At(k: Int) extends Chooser
   case object Only extends Chooser
+
+  /** The member of a ROB or map with key `key`, from the collection itself. */
+  final case class Key(key: Operand) extends Chooser
 }
 
-/** A collection's declaration: its object type and, for diagnostics, its module instance and `val` name. */
+/** What kind of collection a declaration made, with the sizes its checks use. */
+private[eventtrace] sealed trait CollectionKind
+
+private[eventtrace] object CollectionKind {
+  case object Set extends CollectionKind
+
+  /** A FIFO; `entries` of 0 sets no capacity. */
+  final case class Queue(entries: Int) extends CollectionKind
+
+  /** A queue whose tail allocates keys, which count modulo `keys`. */
+  final case class Rob(entries: Int, keys: Int) extends CollectionKind
+
+  /** Members under keys below `entries`. */
+  final case class Map(entries: Int) extends CollectionKind
+}
+
+/** A collection's declaration: its kind, its object type and, for diagnostics, its module instance and `val` name. */
 private[eventtrace] final class CollectionInfo(
   val index:    Int,
   val typeName: String,
   val module:   BaseModule,
-  val valName:  String) {
+  val valName:  String,
+  val kind:     CollectionKind) {
 
   /** The declaring module's instance path and the `val` name, such as `Core.active`; valid once elaboration has
     * finished.
@@ -257,8 +381,19 @@ private[eventtrace] final class CollectionInfo(
 private[eventtrace] sealed trait Effect
 
 private[eventtrace] object Effect {
-  final case class Add(collection: CollectionInfo) extends Effect
+
+  /** The subject joins `collection`, under `key` for a ROB or a map. */
+  final case class Add(collection: CollectionInfo, key: Option[Operand]) extends Effect
+
+  /** The subject leaves a set or a map. */
   final case class Remove(collection: CollectionInfo) extends Effect
+
+  /** The subject leaves the head of a queue or a ROB. */
+  final case class Pop(collection: CollectionInfo) extends Effect
+
+  /** The subject leaves a queue or a ROB through the rollback or clear whose block holds the event. */
+  final case class Drop(collection: CollectionInfo) extends Effect
+
   case object Destroy extends Effect
 }
 
@@ -341,11 +476,38 @@ private[eventtrace] object Queries {
     }
   }
 
+  /** A ROB's or a map's key, as `what` passes it: a `UInt` of known width, which as a literal must be below the
+    * collection's keys or entries.
+    */
+  def key(info: CollectionInfo, key: UInt, what: String, sourceInfo: SourceInfo): Operand = {
+    val bound = info.kind match {
+      case CollectionKind.Rob(_, keys) => keys
+      case CollectionKind.Map(entries) => entries
+      case other                       => throw new IllegalStateException(s"${info.valName} is a $other, which has no keys")
+    }
+    val operand = value(FieldType(EventTrace.MaxFieldBits, signed = false, isBool = false, None), key, what, sourceInfo)
+    operand match {
+      case Operand.Literal(v, _) if v >= bound =>
+        EventTrace.elaborationError(s"$what gives key $v, but ${info.valName}'s keys are below $bound", sourceInfo)
+      case _ =>
+    }
+    operand
+  }
+
+  /** A handle for the member of a ROB or map with `key`. */
+  def byKey[T <: ObjectType](info: CollectionInfo, key: UInt, gen: () => T, sourceInfo: SourceInfo): T = {
+    val handle = gen()
+    val operand = Queries.key(info, key, s"${info.valName}(key)", sourceInfo)
+    handle.binding = Binding.Chosen(ViewExpr.Source(info), Chooser.Key(operand), EventTrace.location(sourceInfo))
+    handle
+  }
+
   /** Every handle a view refers to, other than its own members. */
   def handles(view: ViewExpr): Seq[ObjectType] = view match {
     case ViewExpr.Source(_)              => Nil
     case ViewExpr.Where(in, member, p)   => handles(in) ++ predHandles(p).filterNot(_ eq member)
     case ViewExpr.OrderBy(in, _, _)      => handles(in)
+    case ViewExpr.From(_, _)             => Nil
   }
 
   /** Every hardware value a view compares with. */
@@ -353,6 +515,13 @@ private[eventtrace] object Queries {
     case ViewExpr.Source(_)        => Nil
     case ViewExpr.Where(in, _, p)  => hardware(in) ++ predOperands(p).collect { case h: Operand.Hardware => h }
     case ViewExpr.OrderBy(in, _, _) => hardware(in)
+    case ViewExpr.From(_, key)     => Seq(key).collect { case h: Operand.Hardware => h }
+  }
+
+  /** The hardware value a chooser looks a member up by, if any. */
+  def hardware(chooser: Chooser): Seq[Operand.Hardware] = chooser match {
+    case Chooser.Key(h: Operand.Hardware) => Seq(h)
+    case _                                => Nil
   }
 
   private def predOperands(p: Pred): Seq[Operand] = p match {

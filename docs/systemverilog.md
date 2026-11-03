@@ -339,3 +339,4 @@ checks that the other build compiles nothing of the trace.
 - A query's message names its view without the predicate's text.
 - A design has two files, tied together by its DPI functions.
 - Every event with a subject has a blocking site, and every `by` is optional in the manifest.
+- Collections are sets only: queues, ROBs, and maps are not in `oet` yet.

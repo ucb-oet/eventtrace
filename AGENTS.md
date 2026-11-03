@@ -60,7 +60,7 @@ These apply to trace code in the designs EventTrace annotates, such as Rocket, S
   |---|---|
   | `runtime/` | `make -C runtime test` |
   | `systemverilog/` | `make -C systemverilog test`, and `make -C examples/<example> check-sv check-sv-off` |
-  | `frontend/` | `make -C examples/<example> check` for `stage0`, `stage1`, `objects`, and `collections` |
+  | `frontend/` | `make -C examples/<example> check` for `stage0`, `stage1`, `objects`, `collections`, and `structures` |
   | `reader/` | the examples' `check`, `make -C systemverilog test`, and the Python tests, which all read traces back with it |
   | `python/` | `PYTHONPATH=python EVENTTRACE_BIN=$PWD/reader/target/release/eventtrace python3 -m unittest discover -s python/tests` |
 
