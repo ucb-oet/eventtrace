@@ -42,3 +42,19 @@ check-window: $(BUILD_DIR)/run.log $(BUILD_DIR)/window.trace $(EVENTTRACE)
 		| sed 's/ event_id=[0-9]*//' | diff - $(BUILD_DIR)/window.log
 	@echo "PASS: the window holds the full run's cycles $$(head -1 $(BUILD_DIR)/window.log | cut -d' ' -f2) to" \
 		"$$(tail -1 $(BUILD_DIR)/window.log | cut -d' ' -f2), $$(wc -l < $(BUILD_DIR)/window.log) events"
+
+# The SystemVerilog version: Pipeline.sv and its C++, checked by the same check.awk.
+SV_SOURCES := sv/Pipeline.sv
+SV_CC      := sv/pipeline.cc
+include ../sv.mk
+
+# The same sequences against the C++ library, which the SystemVerilog version uses.
+SV_VIOLATIONS := $(BUILD_DIR)/sv_violations
+$(SV_VIOLATIONS): sv/violations.cc $(OET_CC) $(OET_HEADERS)
+	mkdir -p $(BUILD_DIR)
+	$(CXX) -std=c++20 -O2 -Wall -Wextra -Werror -I$(RUNTIME_SRC) -o $@ sv/violations.cc $(OET_CC)
+
+.PHONY: check-sv-violations
+check-sv: check-sv-violations
+check-sv-violations: $(SV_VIOLATIONS) $(EVENTTRACE)
+	$(SV_VIOLATIONS) "$(DUMP)" $(BUILD_DIR)

@@ -170,6 +170,10 @@ class Bool {
   constexpr bool is_set() const { return set_; }
   constexpr bool value() const { return v_; }
   friend constexpr bool operator==(const Bool& a, const Bool& b) { return a.set_ && b.set_ && a.v_ == b.v_; }
+  friend constexpr std::partial_ordering operator<=>(const Bool& a, const Bool& b) {
+    if (!a.set_ || !b.set_) return std::partial_ordering::unordered;
+    return a.v_ <=> b.v_;
+  }
   static detail::Type type() { return {detail::Kind::Bool, 1, nullptr, nullptr}; }
   detail::Encoded encoded() const { return {set_, v_, true}; }
 
