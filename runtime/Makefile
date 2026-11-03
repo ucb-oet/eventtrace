@@ -1,7 +1,7 @@
-# Builds and runs the runtime's synthetic tests, which need no simulator. The runtime ships in the frontend's
-# resources, so that elaboration writes it next to the RTL.
+# Builds and runs the runtime's synthetic tests, which need no simulator. The runtime's sources are in src/; the
+# frontend's resources link to them, so that elaboration writes them next to the RTL.
 BUILD_DIR := build
-CSRC      := ../frontend/src/main/resources/eventtrace/csrc
+CSRC      := src
 CXXFLAGS  := -std=c++17 -O2 -Wall -Wextra -Werror -I$(CSRC)
 
 .PHONY: test clean

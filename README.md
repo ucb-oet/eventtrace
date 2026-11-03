@@ -43,7 +43,7 @@ trace and manifest formats.
 | Directory | Contents |
 |---|---|
 | `frontend/` | The Chisel library. It also ships the runtime's C++, which elaboration writes next to the RTL. |
-| `runtime/` | Tests of the runtime, which need no simulator. |
+| `runtime/` | The runtime's C++, in `src/`, and its tests, which need no simulator. |
 | `proto/eventtrace.proto` | The trace format. |
 | `python/` | The standalone Python producer package and its interoperability tests. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, Sodor, and native NPU models. |
