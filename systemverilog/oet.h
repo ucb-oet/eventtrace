@@ -3,7 +3,7 @@
 // The design's C++ declares object types, enums, collections, events, and calls, and each DPI function queues a
 // handler with oet::at. The handler queries collections and emits events with Chisel's semantics: queries read the
 // state from before the clock edge, and an event's effects hold from the next cycle. The library writes the trace
-// through the shared runtime and builds the manifest from the declarations. See docs/plans/systemverilog.md.
+// through the shared runtime and builds the manifest from the declarations. See docs/systemverilog.md.
 #pragma once
 
 #if __cplusplus < 202002L
