@@ -81,16 +81,29 @@ Chisel.
 
 ### Event fields
 
-The manifest needs each event's fields before any handler runs, so each event lists them, as pointers to its
-subject's fields that the compiler checks:
+The manifest needs each event's fields before any handler runs, so each event lists them. Its subject's fields are
+listed as pointers, which the compiler checks. The values it carries beyond them are the members of a struct,
+registered with `OET_FIELDS` and given as the event's second template argument:
 
 ```cpp
 oet::Event<Instruction> issue{"issue", &Instruction::stage};
+
+struct DecodeValues { std::optional<StallCause> stall; };   // values beyond the subject's fields
+OET_FIELDS(DecodeValues, stall)
+
+oet::Event<Instruction, DecodeValues> decode{"decode", oet::create,
+    &Instruction::pc, &Instruction::bits, &Instruction::stage, oet::may_block<Instruction>};
+
+decode.emit(i);                                       // stall absent
+decode.emit(i, {.stall = cause}, oet::blocked(b));    // stall present
 ```
 
-- A misspelled field fails to compile.
-- Values that are not fields of the subject are declared with the event too.
-- `emit` checks that the handler set exactly the event's fields.
+- A misspelled field or value fails to compile.
+- Every record sets each listed subject field, except one listed as `oet::optional(&Packet::kind)`. `emit` checks
+  this, and that the handler set no subject field the event does not list.
+- A `std::optional` member may be left out, and the manifest marks it optional. The value types know whether they
+  were set, so `emit` stops the run when a value that is not optional was never set.
+- An event without a subject is emitted with only its values, as `idle.emit({.count = count})`.
 
 ### Calls and sites
 
