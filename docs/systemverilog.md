@@ -308,8 +308,9 @@ A check on a handler runs when the handler first runs, so a call that never fire
 A traced build adds to its Verilator command, where `$EVENTTRACE` is this repository:
 
 - `+define+OET_ENABLE -I$EVENTTRACE/systemverilog`, for the macros;
-- `-CFLAGS "-std=c++20 -I$EVENTTRACE/runtime/src"`, for the library;
-- the design's C++ file, `$EVENTTRACE/runtime/src/oet.cc`, and `$EVENTTRACE/runtime/src/eventtrace_runtime.cc`, as
+- `-CFLAGS "-std=c++20 -I$EVENTTRACE/systemverilog -I$EVENTTRACE/runtime/src"`, for the library and the runtime
+  it builds on;
+- the design's C++ file, `$EVENTTRACE/systemverilog/oet.cc`, and `$EVENTTRACE/runtime/src/eventtrace_runtime.cc`, as
   absolute paths, since the makefile Verilator generates runs in its own directory.
 
 A run then records with `+eventtrace=<path>`, and the manifest is beside the trace:

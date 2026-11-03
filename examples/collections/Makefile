@@ -52,7 +52,7 @@ include ../sv.mk
 SV_VIOLATIONS := $(BUILD_DIR)/sv_violations
 $(SV_VIOLATIONS): sv/violations.cc $(OET_CC) $(OET_HEADERS)
 	mkdir -p $(BUILD_DIR)
-	$(CXX) -std=c++20 -O2 -Wall -Wextra -Werror -I$(RUNTIME_SRC) -o $@ sv/violations.cc $(OET_CC)
+	$(CXX) $(OET_CFLAGS) -O2 -Wall -Wextra -Werror -o $@ sv/violations.cc $(OET_CC)
 
 .PHONY: check-sv-violations
 check-sv: check-sv-violations

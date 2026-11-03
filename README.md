@@ -46,8 +46,8 @@ Chipyard, reading traces, and the trace and manifest formats.
 | Directory | Contents |
 |---|---|
 | `frontend/` | The Chisel library. It also ships the runtime's C++, which elaboration writes next to the RTL. |
-| `runtime/` | The runtime's C++, in `src/`, with `oet`, the C++ library for SystemVerilog designs, and their tests, which need no simulator. |
-| `systemverilog/` | `oet.svh`, the macros a SystemVerilog design calls the library through. |
+| `runtime/` | The runtime's C++, in `src/`, which the Chisel and SystemVerilog flows share, and its tests, which need no simulator. |
+| `systemverilog/` | `oet`, the C++ library for SystemVerilog designs; `oet.svh`, the macros a design calls it through; and the library's tests, which need no simulator. |
 | `proto/eventtrace.proto` | The trace format. |
 | `python/` | The standalone Python producer package and its interoperability tests. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, Sodor, and native NPU models. |
@@ -85,6 +85,7 @@ Verilator). Cargo must also be installed, for the reader.
 
 ```sh
 make -C runtime test
+make -C systemverilog test
 make -C examples/collections check    # likewise stage0, stage1, and objects
 ```
 

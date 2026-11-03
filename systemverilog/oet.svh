@@ -1,5 +1,5 @@
 // oet: EventTrace for SystemVerilog designs. The design calls a DPI function of its own at each traced point, and
-// its C++ handles the call with the oet library (runtime/src/oet.h).
+// its C++ handles the call with the oet library (oet.h, beside this file).
 //
 // Everything here is guarded by OET_ENABLE. Without it, `OET_SETUP(...) expands to nothing and `OET(...) to a null
 // statement, so a build compiles nothing of the trace and has no DPI symbols. A design's own DPI imports, and any

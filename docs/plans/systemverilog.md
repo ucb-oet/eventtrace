@@ -65,7 +65,8 @@ count. An index at or beyond it stops the run on its first call.
 
 ## The C++ library
 
-The library lives in `runtime/`, beside the runtime it extends. It declares:
+The library lives in `systemverilog/`, beside `oet.svh`. `runtime/` keeps only what it shares with the Chisel flow.
+The library declares:
 
 - enums, with `OET_ENUM`;
 - object types, as structs deriving from `oet::Object` whose fields are `oet::Const<T>`, `oet::SetOnce<T>`,
