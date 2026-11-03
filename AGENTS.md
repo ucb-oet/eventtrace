@@ -65,10 +65,26 @@ These apply to trace code in the designs EventTrace annotates, such as Rocket, S
   is absent.
 - Keep build output, traces, and other generated files out of version control.
 
-## Files and documentation
+## File headers
 
-- Begin each new source file, other than Scala, with a comment that says what the file is for. Scala files begin
-  with their package, and document their public classes and methods with Scaladoc.
+- Begin every new or modified source, test, script, build, and documentation file with a short comment that says
+  what the file is for, in the format's own syntax: a block comment above `package` in Scala, `//!` in Rust, a module
+  docstring in Python, `//` in C++ and SystemVerilog, `#` in Make, awk, shell, and TOML, and an HTML comment in
+  Markdown. Formats without comments, such as JSON, are exempt.
+- Keep a shebang or other required first line first, with the comment right after it.
+- Files under a `test/` or `tests/` directory are exempt from the purpose comment and from the declaration comments
+  below.
+
+## Source documentation
+
+For first-party Scala, C++, Rust, Python, and SystemVerilog, including the examples:
+
+- Place a doc comment immediately above every class, trait, object, struct, enum, module, function, method,
+  constructor, macro, and named local helper: Scaladoc in Scala, `///` in Rust, `//` in C++ and SystemVerilog. In
+  Python, use a docstring as the declaration's first statement. Say what the declaration does, and explain its inputs,
+  outputs, behavior, or invariants when a reader needs them to understand it.
+- Keep comments concise and specific, and update them when the implementation changes. A comment that only repeats
+  the declaration's name is not enough.
 - Update the documentation page that owns a behavior in the same change as the behavior. Link to it from elsewhere
   instead of repeating it.
 
