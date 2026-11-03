@@ -123,7 +123,6 @@ struct EnumDecl {
   std::string name;
   std::vector<std::pair<std::string, uint64_t>> variants;
   unsigned width = 1;  // enough for the largest value, as a ChiselEnum's
-  bool has(uint64_t value) const;
 };
 EnumDecl make_enum(const char* name, const char* names, std::initializer_list<uint64_t> values);
 
@@ -1009,7 +1008,8 @@ void Event<T, Values>::destroy_subject(unsigned site, unsigned long long event, 
 }  // namespace oet
 
 // Declares an enum whose values are variants, as a ChiselEnum: OET_ENUM(Stage, Decode, Execute = 4, Writeback). A
-// value converts from an integer explicitly, as Stage(raw), and emit checks that it is a variant.
+// value converts from an integer explicitly, as Stage(raw). As in Chisel, a value from hardware that is no variant is
+// recorded as it is, and emit checks only that it fits the enum's width.
 #define OET_DETAIL_ENUM_VALUE(Name, x) static_cast<uint64_t>(((::oet::detail::IgnoreAssign<Variant>)Variant::x).value)
 #define OET_ENUM(Name, ...)                                                                                      \
   struct Name {                                                                                                  \
@@ -1031,7 +1031,7 @@ void Event<T, Values>::destroy_subject(unsigned site, unsigned long long event, 
       return &d;                                                                                                 \
     }                                                                                                            \
     static ::oet::detail::Type type() { return {::oet::detail::Kind::Enum, decl()->width, &decl, nullptr}; }    \
-    ::oet::detail::Encoded encoded() const { return {set_, v_, decl()->has(v_)}; }                               \
+    ::oet::detail::Encoded encoded() const { return {set_, v_, decl()->width == 64 || v_ >> decl()->width == 0}; } \
                                                                                                                  \
    private:                                                                                                      \
     uint64_t v_ = 0;                                                                                             \

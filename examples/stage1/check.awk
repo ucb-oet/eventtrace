@@ -19,7 +19,9 @@
 # (cycle, site_id) order with event_id counting up from 0. The last cycle's records appear only if the sinks' final
 # blocks flush the runtime.
 # Each record is assigned a slot (0 to 12) from its event and fields. Its site_id is looked up in the manifest's sites
-# table, which must name the record's event and, for the two lanes, their distinct instance paths.
+# table, which must name the record's event and, for the two lanes, their distinct instance paths. A sites table
+# without instance paths, as the C++ library writes for the SystemVerilog version, tells the lanes apart by order:
+# the site of the instance with index 0 comes first.
 # "rest" fields must print in canonical (sorted) order.
 function fail(message) {
   print "FAIL: " message
@@ -42,6 +44,13 @@ function count_at(c) {
 
 BEGIN { split("Off Slow Fast Mode(3)", names, " "); for (i = 0; i < 4; i++) mode_text[i] = names[i + 1] }
 
+# Slot 5 for lane0's site and 6 for lane1's, by instance path, or by order without one.
+function lane_slot(id) {
+  if (instance_of[id] == "Conditional.lane0" || (instance_of[id] == "" && lane_order[id] == 1)) return 5
+  if (instance_of[id] == "Conditional.lane1" || (instance_of[id] == "" && lane_order[id] == 2)) return 6
+  return -1
+}
+
 # Manifest: one site per line in the sites table, one enum per line in the enums table.
 FNR == NR {
   if (index($0, "{\"name\": \"Mode\", \"values\": {\"Off\": 0, \"Slow\": 1, \"Fast\": 2}}")) mode_enum = 1
@@ -51,7 +60,8 @@ FNR == NR {
   if (match($0, /"site_id": [0-9]+/)) {
     id = substr($0, RSTART + 11, RLENGTH - 11) + 0
     match($0, /"event_name": "[^"]*"/); event_of[id] = substr($0, RSTART + 15, RLENGTH - 16)
-    match($0, /"instance": "[^"]*"/);   instance_of[id] = substr($0, RSTART + 13, RLENGTH - 14)
+    instance_of[id] = match($0, /"instance": "[^"]*"/) ? substr($0, RSTART + 13, RLENGTH - 14) : ""
+    if (event_of[id] == "lane") lane_order[id] = ++lane_sites
     sites++
   }
   next
@@ -78,7 +88,7 @@ FNR == NR {
   else if (name == "first")  slot = 1
   else if (name == "second") slot = 2
   else if (name == "rest")   slot = (f["path"] == 0 ? 3 : 4)
-  else if (name == "lane")   slot = (instance_of[id] == "Conditional.lane0" ? 5 : instance_of[id] == "Conditional.lane1" ? 6 : -1)
+  else if (name == "lane")   slot = lane_slot(id)
   else if (name == "mode")   slot = 7
   else if (name == "wide")   slot = 8
   else if (name == "flush")  slot = 9
@@ -112,11 +122,14 @@ END {
   if (!mode_enum) fail("the manifest's enums table lacks Mode with its three variants")
   if (mode_fields != 2) fail("the manifest should list mode and target as Mode enum fields")
   for (id in event_of) {
-    if (event_of[id] == "lane") lanes[instance_of[id]]++
+    if (instance_of[id] == "") bare++
+    else if (event_of[id] == "lane") lanes[instance_of[id]]++
     else if (instance_of[id] != "Conditional") fail("site " id " should be in Conditional, not " instance_of[id])
   }
-  if (lanes["Conditional.lane0"] != 1 || lanes["Conditional.lane1"] != 1)
+  if (bare && bare != sites) fail("some sites have instance paths and some do not")
+  if (!bare && (lanes["Conditional.lane0"] != 1 || lanes["Conditional.lane1"] != 1))
     fail("expected one lane site in each of Conditional.lane0 and Conditional.lane1")
+  if (lane_sites != 2) fail("expected two lane sites, got " lane_sites + 0)
   if (n == 0) { fail("no records"); exit 1 }
   for (c = 0; c <= 52; c++) {
     k = count_at(c)

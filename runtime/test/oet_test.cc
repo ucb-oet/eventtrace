@@ -210,9 +210,9 @@ int main(int argc, char** argv) {
     oet::at(1, end_call, [] { trap.emit(in(Stage::Decode), {.level = 3}); });
   });
   expect_violation("too_wide", "pc = 65536 does not fit UInt<16>", [] { dpi_decode(0, 0, 0x10000, false); });
-  expect_violation("not_variant", "cause = 3 is not a variant of TrapCause", [] {
+  expect_violation("enum_wide", "cause = 9 does not fit TrapCause", [] {
     dpi_decode(0, 0, 0x10, false);
-    oet::at(1, end_call, [] { trap.emit(in(Stage::Decode), {.cause = TrapCause(3)}); });
+    oet::at(1, end_call, [] { trap.emit(in(Stage::Decode), {.cause = TrapCause(9)}); });
   });
   expect_violation("unlisted", "instruction#0.result is assigned, but instruction.issue does not list it", [] {
     dpi_decode(0, 0, 0x10, false);

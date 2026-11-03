@@ -118,10 +118,6 @@ std::string sha256(const std::string& data) {
 
 }  // namespace
 
-bool EnumDecl::has(uint64_t value) const {
-  return std::any_of(variants.begin(), variants.end(), [&](const auto& v) { return v.second == value; });
-}
-
 std::vector<std::string> split_names(const char* names) {
   std::vector<std::string> out;
   std::string current;
@@ -250,11 +246,7 @@ void EventBase::emit_record(Object* subject_object, const void* value_struct, co
       record.absent |= uint64_t{1} << f;
       continue;
     }
-    if (!e.fits) {
-      if (m.type.kind == Kind::Enum)
-        fail(what + ": " + m.name + " = " + value_text(e, m.type) + " is not a variant of " + type_text(m.type));
-      fail(what + ": " + m.name + " = " + value_text(e, m.type) + " does not fit " + type_text(m.type));
-    }
+    if (!e.fits) fail(what + ": " + m.name + " = " + value_text(e, m.type) + " does not fit " + type_text(m.type));
     record.values.push_back(e.bits);
     record.is_signed.push_back(m.type.kind == Kind::SInt);
   }
