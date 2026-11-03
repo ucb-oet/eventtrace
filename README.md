@@ -35,19 +35,23 @@ when (retire) {
 }
 ```
 
-The [documentation](docs/README.md) covers writing annotations, using EventTrace in Chipyard, reading traces, and the
-trace and manifest formats.
+A SystemVerilog design is traced through DPI calls to its own C++, which uses `oet`, a C++ library with the same
+model; see [Annotating SystemVerilog](docs/systemverilog.md).
+
+The [documentation](docs/README.md) covers writing annotations, annotating SystemVerilog, using EventTrace in
+Chipyard, reading traces, and the trace and manifest formats.
 
 ## Layout
 
 | Directory | Contents |
 |---|---|
 | `frontend/` | The Chisel library. It also ships the runtime's C++, which elaboration writes next to the RTL. |
-| `runtime/` | The runtime's C++, in `src/`, and its tests, which need no simulator. |
+| `runtime/` | The runtime's C++, in `src/`, with `oet`, the C++ library for SystemVerilog designs, and their tests, which need no simulator. |
+| `systemverilog/` | `oet.svh`, the macros a SystemVerilog design calls the library through. |
 | `proto/eventtrace.proto` | The trace format. |
 | `python/` | The standalone Python producer package and its interoperability tests. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, Sodor, and native NPU models. |
-| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. |
+| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. Each has a SystemVerilog version in `sv/`. |
 | `docs/` | The documentation. |
 
 ## Use in Chipyard
