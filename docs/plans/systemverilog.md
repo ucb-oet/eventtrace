@@ -32,14 +32,16 @@ The existing runtime keeps its `eventtrace` namespace and its `eventtrace_open`,
 
 The macros ship in a header under `systemverilog/`:
 
-- `` `OET(call) `` expands to the call when `OET_ENABLE` is defined, and to nothing otherwise.
+- `` `OET(call) `` expands to the call when `OET_ENABLE` is defined, and otherwise to a null statement, so that
+  `` if (c) `OET(...) `` stays a statement.
 - `` `OET_CLOCK(clk) `` declares `oet_cycle`, the clock edges since the simulation started. It also holds what a
   Chisel sink's `initial` and `final` blocks do: it reads the same plusargs (`+eventtrace`, `+eventtrace_start`,
   `+eventtrace_stop`), opens the trace, and finishes it.
 
 **Cost when off is zero.** Without `OET_ENABLE`, nothing trace-related is compiled. The imports, `oet_cycle`, and the
-`initial` and `final` blocks sit inside `` `ifdef OET_ENABLE ``, inline calls use `` `OET(...) ``, and the build
-does not add the C++ files. The simulated RTL is exactly the design's, with no DPI symbols. A build with `OET_ENABLE`
+`initial` and `final` blocks sit inside `` `ifdef OET_ENABLE ``, inline calls use `` `OET(...) ``, a block that
+exists only to call sits inside `` `ifdef OET_ENABLE `` with the design's imports, and the build does not add the
+C++ files. The simulated RTL is exactly the design's, with no DPI symbols. A build with `OET_ENABLE`
 makes its DPI calls even when the run is not recording, so a run that should cost nothing is built without it.
 
 **Each DPI function is written by the user,** in this shape:
