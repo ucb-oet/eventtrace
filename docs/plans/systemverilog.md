@@ -70,7 +70,7 @@ The library lives in `runtime/`, beside the runtime it extends. It declares:
   `oet::Mutable<T>` or `oet::Parent<T>`, registered with `OET_OBJECT`;
 - collections, as `oet::Collection<T>`;
 - events, as `oet::Event<T>`, with a name, a subject type, a lifecycle (`oet::create`, `oet::complete`, or
-  `oet::abort`), the fields its records carry, and, as `oet::by<T>`, the type of the object a record may name as
+  `oet::abort`), the fields its records carry, and, as `oet::by<T>()`, the type of the object a record may name as
   what blocks or aborted its subject;
 - calls, as `oet::Call`, each with a name, an optional count of indices, and the events its handler emits.
 
@@ -92,7 +92,7 @@ struct DecodeValues { std::optional<StallCause> stall; };   // values beyond the
 OET_FIELDS(DecodeValues, stall)
 
 oet::Event<Instruction, DecodeValues> decode{"decode", oet::create,
-    &Instruction::pc, &Instruction::bits, &Instruction::stage, oet::by<Instruction>};
+    &Instruction::pc, &Instruction::bits, &Instruction::stage, oet::by<Instruction>()};
 
 decode.emit(i);                                       // stall absent
 decode.emit(i, {.stall = cause}, oet::blocked(b));    // stall present
@@ -139,11 +139,12 @@ void oet_vdisp(long long cycle, int slot, unsigned vseq, unsigned long long pc) 
 ### Blocking and causes
 
 Whether a record is blocked, and by what, is chosen per record at `emit`. The declaration says only what the manifest
-needs up front: with `oet::by<T>`, the type of the object a record may name as its cause.
+needs up front: with `oet::by<T>()`, the type of the object a record may name as its cause. The parentheses are
+needed because `oet::by(br)` at `emit` shares the name, and C++ lets a function, but not a variable, share it.
 
 ```cpp
-oet::Event<Instruction> decode{"decode", oet::create, &Instruction::pc, &Instruction::stage, oet::by<Instruction>};
-oet::Event<Instruction> squash{"squash", oet::abort, oet::by<Instruction>};
+oet::Event<Instruction> decode{"decode", oet::create, &Instruction::pc, &Instruction::stage, oet::by<Instruction>()};
+oet::Event<Instruction> squash{"squash", oet::abort, oet::by<Instruction>()};
 oet::Event<Fetch>       miss  {"miss"};
 
 decode.emit(i);                          // not blocked
@@ -157,7 +158,7 @@ The library maps this onto today's formats, which do not change:
 
 - Each (call, index, event) with a subject gets two sites, one with `"blocks": true` and one without, and `emit` picks
   the right one.
-- An event declared with `oet::by<T>` has a field `by`, an `Id` of `T`, always `optional`. Its role is `aborted_by`
+- An event declared with `oet::by<T>()` has a field `by`, an `Id` of `T`, always `optional`. Its role is `aborted_by`
   for an `abort` event and `blocked_by` otherwise. A record that names no cause leaves it absent.
 - An `abort` event emitted as blocked stops the run.
 - `by` is not a field in the C++ API.
