@@ -10,3 +10,8 @@ include ../common.mk
 check: check-rejects
 check-rejects:
 	cd $(EVENTTRACE_DIR) && $(SBT) "$(SBT_PROJECT)/runMain eventtrace.examples.objects.Rejects"
+
+# The SystemVerilog version: Arrivals.sv and its C++, checked by the same check.awk.
+SV_SOURCES := sv/Arrivals.sv
+SV_CC      := sv/arrivals.cc
+include ../sv.mk
