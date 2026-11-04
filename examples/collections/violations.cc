@@ -59,6 +59,7 @@ bool run(const Scenario& s, std::size_t index) {
   const std::string trace = trace_dir + "/violation" + std::to_string(index) + ".trace";
   int err[2];
   if (pipe(err) != 0) std::abort();
+  std::fflush(stdout);  // a child would otherwise print what is still buffered again
   const pid_t pid = fork();
   if (pid == 0) {
     dup2(err[1], 2);
