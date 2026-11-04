@@ -3,11 +3,14 @@
 #include "VTestTop__Dpi.h"  // Verilator's prototypes of the design's imports, so a mismatch fails to compile
 #include "oet.h"
 
+// The stage an instruction is in, as Pipeline.scala's Stage.
 OET_ENUM(Stage,
          Decode,
          Execute,
          Writeback);
 
+// An instruction, from decode until it retires or is squashed: its PC, whether the PC is odd, its stage, and the
+// result writeback gives it.
 struct Instruction : oet::Object {
   oet::Const<oet::UInt<8>> pc;
   oet::Const<bool> odd;
@@ -16,13 +19,16 @@ struct Instruction : oet::Object {
 };
 OET_OBJECT(Instruction, "instruction", pc, odd, stage, result)
 
+// A request that the instruction in execute issues, done two cycles later, keeping that instruction's ID for life.
 struct Request : oet::Object {
   oet::Parent<Instruction> insn;  // the instruction that issued it
 };
 OET_OBJECT(Request, "request", insn)
 
+// sample's value: `pass`, 0 for the first of a member's two events in a cycle and 1 for the second.
 struct SampleValues { oet::UInt<1> pass; };
 OET_FIELDS(SampleValues, pass)
+// idle's value: the counter.
 struct IdleValues { oet::UInt<8> count; };
 OET_FIELDS(IdleValues, count)
 
@@ -59,6 +65,7 @@ oet::Call request_issue_call{"request_issue", {request_issue}};
 oet::Call request_done_call{"request_done", {request_done}};
 oet::Call pick_call{"pick", {pick}};
 
+// The instruction in stage `s`; a violation unless exactly one is.
 Instruction& in(Stage s) { return active.where([s](Instruction& m) { return m.stage == s; }).only(); }
 
 // Join order is admission order.
@@ -113,6 +120,7 @@ void oet_stall(long long cycle) {
 }
 // Two events per member, even PCs before odd ones and otherwise in join order.
 void oet_sample(long long cycle) {
+  // Ranks a member by whether its PC is odd, so that even PCs come first.
   const auto by_odd = [](Instruction& m) { return m.odd.get(); };
   oet::at(cycle, sample_first_call, [=] {
     for (Instruction& i : active.order_by(by_odd)) sample.emit(i, {.pass = 0});
@@ -151,6 +159,7 @@ void oet_request_issue(long long cycle) {
     request_issue.emit(r);
   });
 }
+// The oldest request is done and leaves.
 void oet_request_done(long long cycle) {
   oet::at(cycle, request_done_call, [] {
     Request& r = requests.head();

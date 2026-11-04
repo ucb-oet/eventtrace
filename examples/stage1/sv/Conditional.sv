@@ -10,6 +10,7 @@ module Lane #(
   input logic [7:0] in
 );
 `ifdef OET_ENABLE
+  // When the input's low bit is set: lane, from the site that Index picks, with the input.
   import "DPI-C" function void oet_lane(input longint cycle, input int index, input byte unsigned value);
   `OET_SETUP(clock)
   always @(posedge clock)
@@ -17,24 +18,37 @@ module Lane #(
 `endif
 endmodule
 
+// Conditional.scala's design: an 8-bit counter whose bits select the sites, with two Lane instances.
 module Conditional (
   input  logic       clock,
   input  logic       reset,
   output logic [7:0] io_count
 );
 `ifdef OET_ENABLE
+  // Every cycle out of reset: tick, which has no fields.
   import "DPI-C" function void oet_tick(input longint cycle);
+  // Count bit 2 set, phase 0: first, with the count.
   import "DPI-C" function void oet_first(input longint cycle, input byte unsigned count);
+  // Count bit 2 set, phase 1: second, with the count and the count plus 3.
   import "DPI-C" function void oet_second(input longint cycle, input byte unsigned count, input byte unsigned sum);
+  // Count bit 2 set, phase 2: rest at its first site, which the C++ gives path 0.
   import "DPI-C" function void oet_rest_even(input longint cycle, input byte unsigned phase, input bit odd);
+  // Count bit 2 set, phase 3: rest at its other site, which the C++ gives path 1.
   import "DPI-C" function void oet_rest_odd(input longint cycle, input byte unsigned phase, input bit odd);
+  // Count bit 3 set: mode, with count mod 4, of which 3 is no variant of Mode.
   import "DPI-C" function void oet_mode(input longint cycle, input byte unsigned mode);
+  // Count bit 4 set: wide, with fields of 32, 36, and 8 bits.
   import "DPI-C" function void oet_wide(input longint cycle, input int unsigned a, input longint unsigned b,
                                         input byte unsigned c);
+  // At count 5: flush, leaving its cause Absent.
   import "DPI-C" function void oet_flush_absent(input longint cycle);
+  // At count 6: flush, with count mod 4 as its cause.
   import "DPI-C" function void oet_flush(input longint cycle, input byte unsigned cause);
+  // When count bit 1 rises: rise1.
   import "DPI-C" function void oet_rise1(input longint cycle);
+  // When count bit 2 rises: rise2.
   import "DPI-C" function void oet_rise2(input longint cycle);
+  // When count bit 2 falls: fall2.
   import "DPI-C" function void oet_fall2(input longint cycle);
 `endif
   `OET_SETUP(clock)

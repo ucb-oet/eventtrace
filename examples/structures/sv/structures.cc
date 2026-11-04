@@ -16,6 +16,7 @@ struct Uop : oet::Object {
 };
 OET_OBJECT(Uop, "uop", pc, insn)
 
+// complete's value: whether the instruction is a branch that mispredicted.
 struct CompleteValues { oet::Bool mispredict; };
 OET_FIELDS(CompleteValues, mispredict)
 

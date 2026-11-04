@@ -53,6 +53,10 @@ class Misuse extends Module {
   when (fire(21)) { q.dropYoungest(3.U) { c => c.event("trim3") { c.abort() } } }
 }
 
+/** Elaborates [[Misuse]] with tracing on into the directory given as the first argument, `build/misuse` by default,
+  * and writes the manifest there. violations.cc compiles the generated handlers and reads its traces back with the
+  * manifest.
+  */
 object MisuseMain extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/misuse")

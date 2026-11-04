@@ -1,3 +1,4 @@
+/* Stage 0 example: a counter with one two-field event, and the entry point that elaborates it with tracing on. */
 package eventtrace.examples.stage0
 
 import chisel3._
@@ -27,6 +28,9 @@ class Counter extends Module {
   }
 }
 
+/** Elaborates [[Counter]] with tracing on and writes the RTL, split one file per module, and the manifest into the
+  * directory given as the first argument, build/rtl by default.
+  */
 object Main extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")

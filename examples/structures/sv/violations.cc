@@ -16,7 +16,10 @@
 
 #include "oet.h"
 
+// The library's entry point that `OET_SETUP imports to open the trace at `path`, with the recording window's
+// triggers, and write the manifest beside it as <path>.json; called here directly, without a simulator.
 extern "C" void oet_open(const char* path, const char* start, const char* stop);
+// The library's entry point that `OET_SETUP imports to finish the trace, handling the last cycle's calls.
 extern "C" void oet_finish();
 
 // An object held by the fixture's queue, ROB, and map.
@@ -107,6 +110,8 @@ void declare() {
   call(trim3, "trim3", [] { for (Cell& c : q.drop_youngest(3)) trim3.emit(c); });
 }
 
+// A sequence of synthetic calls and how its run must end: stopped with a violation containing every part of
+// `violation`, or, if that is empty, finished normally with a trace containing `records`.
 struct Scenario {
   const char* label;
   std::vector<std::vector<std::string>> cycles;  // the calls firing in cycles 0, 1, ...
@@ -176,6 +181,8 @@ bool run(const Scenario& s, std::size_t index) {
 
 }  // namespace
 
+// Takes the dump command and the trace directory, declares the calls, then runs every scenario and fails if any did
+// not end as expected.
 int main(int argc, char** argv) {
   if (argc != 3) {
     std::fprintf(stderr, "usage: %s <dump command> <trace directory>\n", argv[0]);

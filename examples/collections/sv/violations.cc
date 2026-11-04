@@ -15,9 +15,13 @@
 
 #include "oet.h"
 
+// The library's entry point that `OET_SETUP imports to open the trace at `path`, with the recording window's
+// triggers, and write the manifest beside it as <path>.json; called here directly, without a simulator.
 extern "C" void oet_open(const char* path, const char* start, const char* stop);
+// The library's entry point that `OET_SETUP imports to finish the trace, handling the last cycle's calls.
 extern "C" void oet_finish();
 
+// The object Misuse.scala's collections hold, with a field of each property: const, setOnce, and mutable.
 struct Cell : oet::Object {
   oet::Const<oet::UInt<4>> key;
   oet::SetOnce<oet::UInt<4>> once;
@@ -31,8 +35,10 @@ struct Note : oet::Object {
 };
 OET_OBJECT(Note, "note", v)
 
+// census's value: `first`, the ID of a's head.
 struct CensusValues { oet::Id<Cell> first; };
 OET_FIELDS(CensusValues, first)
+// jot's value: `self`, the ID of the note it creates.
 struct JotValues { oet::Id<Note> self; };
 OET_FIELDS(JotValues, self)
 
@@ -67,12 +73,15 @@ namespace {
 // One call per Chisel site, in its order, each emitting its site's event; its handler by name.
 std::map<std::string, std::pair<oet::Call*, std::function<void()>>> calls;
 
+// The cell with key 0 in a, as Misuse.scala's `zero`; a violation unless exactly one matches.
 Cell& zero() { return a.where([](Cell& c) { return c.key == 0u; }).only(); }
 
+// Declares the call `name`, which emits `event` and runs `handler`.
 void call(oet::detail::EventBase& event, const char* name, std::function<void()> handler) {
   calls[name] = {new oet::Call(name, {event}), std::move(handler)};
 }
 
+// Declares every call, in Misuse.scala's site order, each doing what its Chisel site does.
 void declare() {
   call(make0, "make0", [] { Cell& c = make0.create(); c.key = 0; a.add(c); make0.emit(c); });
   call(make1, "make1", [] { Cell& c = make1.create(); c.key = 1; a.add(c); make1.emit(c); });
@@ -98,6 +107,8 @@ void declare() {
   call(jot, "jot", [] { Note& n = jot.create(); n.v = 1; jot.emit(n, {.self = n}); });
 }
 
+// A sequence of synthetic calls and how its run must end: stopped with a violation containing every part of
+// `violation`, or, if that is empty, finished normally with a trace containing `records`.
 struct Scenario {
   const char* label;
   std::vector<std::vector<std::string>> cycles;  // the calls firing in cycles 0, 1, ...
@@ -107,6 +118,7 @@ struct Scenario {
 
 std::string dump, trace_dir;
 
+// Everything readable from `fd`, which it then closes.
 std::string drain(int fd) {
   std::string s;
   char buffer[4096];
@@ -127,6 +139,8 @@ std::string text_of(const std::string& path) {
   return text;
 }
 
+// Runs scenario `s` in a child process, writing its trace as sv_violation<index>.trace in the trace directory, and
+// prints and returns whether it ended as expected.
 bool run(const Scenario& s, std::size_t index) {
   const std::string trace = trace_dir + "/sv_violation" + std::to_string(index) + ".trace";
   std::fflush(stdout);  // or the child would print what the parent has buffered
@@ -165,6 +179,8 @@ bool run(const Scenario& s, std::size_t index) {
 
 }  // namespace
 
+// Takes the dump command and the trace directory, declares the calls, then runs every scenario and fails if any did
+// not end as expected.
 int main(int argc, char** argv) {
   if (argc != 3) {
     std::fprintf(stderr, "usage: %s <dump command> <trace directory>\n", argv[0]);

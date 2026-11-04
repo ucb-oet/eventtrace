@@ -3,19 +3,30 @@
 // the C++.
 `include "oet.svh"
 
+// Structures.scala's pipeline: a four-entry fetch queue, an eight-entry ROB tagged {wrap, index}, and a four-slot
+// reservation station, with io_pc the next PC to fetch. Each DPI call passes oet_cycle first.
 module Structures (
   input  logic       clock,
   input  logic       reset,
   output logic [7:0] io_pc
 );
 `ifdef OET_ENABLE
+  // The next PC, `pc`, joins the fetch queue's tail.
   import "DPI-C" function void oet_fetch(input longint cycle, input byte unsigned pc);
+  // The fetch queue's head, with PC `pc`, joins the ROB with tag `rob_tail`, and its operation takes
+  // reservation-station slot `slot`.
   import "DPI-C" function void oet_dispatch(input longint cycle, input byte unsigned rob_tail, input byte unsigned pc,
                                             input byte unsigned slot);
+  // The operation in `slot` executes, and its instruction, with ROB tag `tag`, completes; `mispredict` marks a branch
+  // that mispredicts.
   import "DPI-C" function void oet_execute(input longint cycle, input byte unsigned slot, input byte unsigned tag,
                                            input bit mispredict);
+  // A jump that dispatch resolves: the fetch queue's `younger` entries, fetched after it, leave.
   import "DPI-C" function void oet_jump(input longint cycle, input byte unsigned younger);
+  // A branch with PC `exe_pc` mispredicts: the ROB's tail moves back to `cut`, younger operations leave the reservation
+  // station, and the fetch queue empties.
   import "DPI-C" function void oet_mispredict(input longint cycle, input byte unsigned cut, input byte unsigned exe_pc);
+  // The ROB's head commits.
   import "DPI-C" function void oet_commit(input longint cycle);
 `endif
   `OET_SETUP(clock)

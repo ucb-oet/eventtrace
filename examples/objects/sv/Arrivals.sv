@@ -1,14 +1,18 @@
 // Objects in SystemVerilog: Arrivals.scala's three create sites, each a DPI call in the branch that selects it.
 `include "oet.svh"
 
+// Arrivals.scala's design: an 8-bit counter whose value selects three create sites.
 module Arrivals (
   input  logic       clock,
   input  logic       reset,
   output logic [7:0] io_count
 );
 `ifdef OET_ENABLE
+  // Every 4th cycle: creates a packet with its sequence number and kind.
   import "DPI-C" function void oet_arrive4(input longint cycle, input byte unsigned seq, input byte unsigned kind);
+  // Every 8th cycle: creates another packet, without a kind.
   import "DPI-C" function void oet_arrive8(input longint cycle, input byte unsigned seq);
+  // Every 3rd cycle: creates a token with its slot.
   import "DPI-C" function void oet_grant(input longint cycle, input byte unsigned slot);
 `endif
   `OET_SETUP(clock)

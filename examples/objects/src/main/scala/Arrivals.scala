@@ -1,3 +1,4 @@
+/* Objects example: create events for two object types, and the entry point that elaborates it with tracing on. */
 package eventtrace.examples.objects
 
 import chisel3._
@@ -7,11 +8,15 @@ import eventtrace.EventTrace.syntax._
 
 import java.nio.file.{Files, Paths}
 
+/** A packet: its sequence number, fixed at creation, and its kind, which can be set once and which one of the two
+  * create sites leaves Absent.
+  */
 class Packet extends EventTrace.ObjectType("packet") {
   val seq  = const(UInt(8.W))
   val kind = setOnce(UInt(2.W))
 }
 
+/** A token, created every third cycle with its slot, the counter's low four bits, fixed at creation. */
 class Token extends EventTrace.ObjectType("token") {
   val slot = const(UInt(4.W))
 }
@@ -39,6 +44,9 @@ class Arrivals extends Module {
   }
 }
 
+/** Elaborates [[Arrivals]] with tracing on and writes the RTL, split one file per module, and the manifest into the
+  * directory given as the first argument, build/rtl by default.
+  */
 object Main extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")

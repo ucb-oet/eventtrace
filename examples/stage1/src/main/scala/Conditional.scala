@@ -1,3 +1,5 @@
+/* Stage 1 example: event sites under when/elsewhen/otherwise, in a module instantiated twice, with enum, wide, and
+ * Absent fields, and at counter edges; and the entry point that elaborates it with tracing on. */
 package eventtrace.examples.stage1
 
 import chisel3._
@@ -114,6 +116,9 @@ class Conditional extends Module {
   lane1.io.in := count + 1.U
 }
 
+/** Elaborates [[Conditional]] with tracing on and writes the RTL, split one file per module, and the manifest into the
+  * directory given as the first argument, build/rtl by default.
+  */
 object Main extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")

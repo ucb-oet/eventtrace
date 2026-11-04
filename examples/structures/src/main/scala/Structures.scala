@@ -150,6 +150,9 @@ class Structures extends Module {
   }
 }
 
+/** Elaborates [[Structures]] with tracing on into the directory given as the first argument, `build/rtl` by
+  * default, then writes the manifest there.
+  */
 object Main extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")

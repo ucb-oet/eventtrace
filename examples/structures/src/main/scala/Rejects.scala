@@ -21,6 +21,7 @@ class Holder(body: (UInt, EventTrace.Queue[Cell], EventTrace.Rob[Cell], EventTra
 /** Passes only if each design fails to elaborate with its expected error. */
 object Rejects extends App {
   EventTrace.enable()
+  /** A case's design: a [[Holder]] running `body`, built only when the case elaborates it. */
   private def design(
     body: (UInt, EventTrace.Queue[Cell], EventTrace.Rob[Cell], EventTrace.MapCollection[Cell]) => Unit
   ): () => RawModule = () => new Holder(body)

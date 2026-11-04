@@ -1,3 +1,5 @@
+/* Designs breaking a rule of collections, queries, tests, events, or fields, each of which must fail to elaborate with
+ * its own error. */
 package eventtrace.examples.collections
 
 import chisel3._
@@ -5,10 +7,12 @@ import circt.stage.ChiselStage
 import eventtrace.EventTrace
 import eventtrace.EventTrace.syntax._
 
+/** A second object type, so that a query can compare IDs of two types. */
 class Token extends EventTrace.ObjectType("token") {
   val slot = const(UInt(4.W))
 }
 
+/** An object type declaring two parents, which elaboration rejects: a type has at most one. */
 class TwoParents extends EventTrace.ObjectType("two_parents") {
   val a = parent(new Instruction)
   val b = parent(new Instruction)
@@ -32,6 +36,7 @@ class Chooser(active: EventTrace.Collection[Instruction]) extends Module {
 /** Passes only if each design fails to elaborate with its expected error. */
 object Rejects extends App {
   EventTrace.enable()
+  /** A case's design: a [[Case]] running `body`, built only when the case elaborates it. */
   private def design(body: (UInt, SInt, EventTrace.Collection[Instruction]) => Unit): () => RawModule =
     () => new Case(body)
 

@@ -2,23 +2,37 @@
 // selects it. The queries, effects, and tests are in the C++.
 `include "oet.svh"
 
+// Pipeline.scala's three-stage pipeline, which its counter, output as io_count, drives. Each DPI call passes
+// oet_cycle first, then the hardware values its handler needs; the sites named below are Pipeline.scala's.
 module Pipeline (
   input  logic       clock,
   input  logic       reset,
   output logic [7:0] io_count
 );
 `ifdef OET_ENABLE
+  // Site 0: an instruction with PC `pc` enters decode.
   import "DPI-C" function void oet_decode(input longint cycle, input byte unsigned pc);
+  // Site 1: the instruction in decode moves to execute.
   import "DPI-C" function void oet_issue(input longint cycle);
+  // Site 2: the instruction with PC `pc` moves to writeback with `result`.
   import "DPI-C" function void oet_writeback(input longint cycle, input byte unsigned pc, input byte unsigned result);
+  // Site 3: the oldest instruction retires.
   import "DPI-C" function void oet_retire(input longint cycle);
+  // Site 4: the instruction in execute squashes every younger one.
   import "DPI-C" function void oet_squash(input longint cycle);
+  // Site 5: the instruction in decode starts to wait on the one in execute.
   import "DPI-C" function void oet_stall(input longint cycle);
+  // Sites 6 and 7: two events on every member.
   import "DPI-C" function void oet_sample(input longint cycle);
+  // Sites 8 and 9: the second member in join order, and the head of a ranking by stage.
   import "DPI-C" function void oet_second(input longint cycle);
+  // Sites 10 to 12: tests on a view's size; `exe_pc` finds the instruction in execute, and idle carries `count`.
   import "DPI-C" function void oet_every3(input longint cycle, input byte unsigned exe_pc, input byte unsigned count);
+  // Site 13: the instruction in execute issues a request.
   import "DPI-C" function void oet_request_issue(input longint cycle);
+  // Site 14: the oldest request is done.
   import "DPI-C" function void oet_request_done(input longint cycle);
+  // Site 15: the oldest instruction if `oldest` is set, else the one in decode.
   import "DPI-C" function void oet_pick(input longint cycle, input bit oldest);
 `endif
   `OET_SETUP(clock)
