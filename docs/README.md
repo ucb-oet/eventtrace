@@ -1,3 +1,5 @@
+<!-- The documentation map: each page under docs/ and what it covers. -->
+
 # EventTrace documentation
 
 - [Overview](overview.md): what EventTrace records, its model of events, objects, and collections, and how a trace

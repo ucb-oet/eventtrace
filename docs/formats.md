@@ -1,3 +1,6 @@
+<!-- The contract for the trace and the manifest, for writing your own tools: the manifest's fields, the trace's
+     records, what a trace means, and the optional metadata of native manifests. -->
+
 # Trace and manifest formats
 
 A trace is meaningful only with its design's manifest. The trace format, `proto/eventtrace.proto`, is the same for

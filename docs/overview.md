@@ -1,3 +1,6 @@
+<!-- What EventTrace records, its model of events, objects, and collections, its timing, and how a traced
+     simulation produces a trace. -->
+
 # Overview
 
 EventTrace records what happens inside a design during a simulation as a list of events, such as "instruction 12

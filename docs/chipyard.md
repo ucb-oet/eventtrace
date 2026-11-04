@@ -1,3 +1,6 @@
+<!-- How to trace a Chipyard simulation: enabling tracing in a config, building, recording a trace or a window
+     of it, what happens when the runtime stops a run, and the same steps for flows outside Chipyard. -->
+
 # Using EventTrace in Chipyard
 
 EventTrace is a submodule of Chipyard at `tools/eventtrace`, and Chipyard's `build.sbt` builds its frontend as the

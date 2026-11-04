@@ -1,3 +1,6 @@
+<!-- How several modules share one collection: passing it as a constructor parameter or through a Parameters
+     key, the elaboration order this needs, and the rule that an event's captures stay in its own module. -->
+
 # Sharing collections between modules
 
 A collection belongs to the module that declares it. Each elaborated declaration is its own collection, so two

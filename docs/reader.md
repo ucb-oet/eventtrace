@@ -1,3 +1,6 @@
+<!-- How to read traces with the `eventtrace` command: building it, its text output, the view files, and the
+     Perfetto and waterfall converters. -->
+
 # Reading traces
 
 The reader is the `eventtrace` command, in `reader/`, written in Rust. Build it with Cargo:
