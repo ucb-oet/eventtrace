@@ -351,6 +351,13 @@ eventtrace: cell.poke at site 6 (call poke, cycle 1): only found 0 members of Mi
 
 A check on a handler runs when the handler first runs, so a call that never fires is never checked.
 
+The design's C++ can stop the run with a check of its own, such as comparing the trace's state with the hardware's,
+by calling `oet::fail(message)` in a handler. The message names the call and the cycle, as the library's own do:
+
+```cpp
+if (blocks.size() != blocks_held) oet::fail("the trace holds " + std::to_string(blocks.size()) + " blocks");
+```
+
 ## Building with Verilator
 
 A traced build adds to its Verilator command, where `$EVENTTRACE` is this repository:
@@ -385,3 +392,4 @@ checks that the other build compiles nothing of the trace.
   carries its removal. In Chisel, `pop` returns a handle that takes exactly one event, and the block of `clear`,
   `rollback`, or `dropYoungest` holds exactly one event on its member.
 - A key is checked when the handler runs, where Chisel checks a literal key at elaboration.
+- `oet::fail` lets the design's C++ add checks of its own; a Chisel design has no code that runs with the trace.

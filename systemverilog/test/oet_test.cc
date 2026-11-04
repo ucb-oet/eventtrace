@@ -194,6 +194,9 @@ int main(int argc, char** argv) {
       i.pc = 7;
     });
   });
+  expect_violation("design_check", "issue at site 4 (call issue, cycle 0): the design's own check failed", [] {
+    oet::at(0, issue_call, [] { oet::fail("the design's own check failed"); });
+  });
   expect_violation("pending", "instruction#0 has effects that no event emitted on it", [] {
     dpi_decode(0, 0, 0x10, false);
     oet::at(1, issue_call, [] { in(Stage::Decode).stage = Stage::Execute; });
@@ -334,7 +337,7 @@ int main(int argc, char** argv) {
          "the manifest's sites have no instance or source");
 
   if (failures) return 1;
-  std::printf("PASS: calls without a trace open do nothing; 16 broken rules stop the run with their messages; the "
+  std::printf("PASS: calls without a trace open do nothing; 17 broken rules stop the run with their messages; the "
               "pipeline's records are written in site order with blocking sites, causes, values up to 64 bits wide, a "
               "parent, and a subjectless event, and the reader reads them with the manifest the library wrote beside the trace\n");
   return 0;

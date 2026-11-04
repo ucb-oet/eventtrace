@@ -763,6 +763,10 @@ void at(long long cycle, const Call& call, F&& handler) {
   at(cycle, CallSite{&call, 0, false}, std::forward<F>(handler));
 }
 
+// Stops the run with `message`, naming the running handler's call and cycle, as the library's own checks do: for
+// the design's own checks, such as comparing the trace's state with the hardware's.
+[[noreturn]] void fail(const std::string& message);
+
 // Members of a collection, as a query has narrowed or ordered them, in order.
 template <class T>
 class View {

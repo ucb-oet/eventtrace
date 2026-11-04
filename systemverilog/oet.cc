@@ -612,6 +612,8 @@ std::string Library::build_manifest() const {
 
 }  // namespace detail
 
+void fail(const std::string& message) { detail::fail(message); }
+
 Call::Call(const char* n, Events list) : Call(n, 1, list) {}
 
 Call::Call(const char* n, unsigned c, Events list) : name(n), count(c) {
