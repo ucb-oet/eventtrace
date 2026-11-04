@@ -48,8 +48,9 @@ OET_FIELDS(TrapValues, cause, level)
 struct TickValues {
   oet::UInt<16> count;
   oet::SInt<8> delta;
+  oet::UInt<64> stamp;
 };
-OET_FIELDS(TickValues, count, delta)
+OET_FIELDS(TickValues, count, delta, stamp)
 
 oet::Collection<Instruction> active{"active"};
 oet::Collection<Request> requests{"requests"};
@@ -142,8 +143,8 @@ void dpi_request(long long cycle, bool write) {
     request.emit(r);
   });
 }
-void dpi_tick(long long cycle, unsigned count, int delta) {
-  oet::at(cycle, tick_call, [=] { tick.emit({.count = count, .delta = delta}); });
+void dpi_tick(long long cycle, unsigned count, int delta, unsigned long long stamp) {
+  oet::at(cycle, tick_call, [=] { tick.emit({.count = count, .delta = delta, .stamp = stamp}); });
 }
 
 // Runs `body` in a child process, which must stop with a message containing `error`.
@@ -181,7 +182,7 @@ int main(int argc, char** argv) {
   }
 
   // Without a trace open, calls do nothing.
-  dpi_tick(0, 1, 1);
+  dpi_tick(0, 1, 1, 0);
 
   // Broken rules, each in a child.
   expect_violation("no_member", "issue at site 4 (call issue, cycle 0): head found no members of active.where(...)",
@@ -282,12 +283,12 @@ int main(int argc, char** argv) {
   dpi_issue(1);
   dpi_decode(1, 0, 0x108, true);
   dpi_writeback(2, -3);
-  dpi_tick(2, 7, -2);
+  dpi_tick(2, 7, -2, ~0ull);
   dpi_end(3, true, 5);
   dpi_decode(4, 1, 0x10c, false);
   dpi_issue(5);
   dpi_request(6, true);
-  dpi_tick(6, 9, 3);
+  dpi_tick(6, 9, 3, 6);
   oet_finish();
 
   const std::string command = std::string(argv[1]) + " dump build/oet_test.trace.json build/oet_test.trace";
@@ -304,7 +305,7 @@ int main(int argc, char** argv) {
       "eventtrace cycle=1 event_id=2 site_id=1 instruction.decode subject=instruction#2 by=instruction#0 pc=264 stage=Decode\n"
       "eventtrace cycle=1 event_id=3 site_id=4 instruction.issue subject=instruction#0 stage=Execute\n"
       "eventtrace cycle=2 event_id=4 site_id=6 instruction.writeback subject=instruction#0 result=-3 stage=Writeback\n"
-      "eventtrace cycle=2 event_id=5 site_id=16 tick count=7 delta=-2\n"
+      "eventtrace cycle=2 event_id=5 site_id=16 tick count=7 delta=-2 stamp=0xffffffffffffffff\n"
       "eventtrace cycle=3 event_id=6 site_id=8 instruction.retire subject=instruction#0\n"
       "eventtrace cycle=3 event_id=7 site_id=10 instruction.squash subject=instruction#1 by=instruction#0\n"
       "eventtrace cycle=3 event_id=8 site_id=10 instruction.squash subject=instruction#2 by=instruction#0\n"
@@ -312,7 +313,7 @@ int main(int argc, char** argv) {
       "eventtrace cycle=4 event_id=10 site_id=2 instruction.decode subject=instruction#3 pc=268 stage=Decode\n"
       "eventtrace cycle=5 event_id=11 site_id=4 instruction.issue subject=instruction#3 stage=Execute\n"
       "eventtrace cycle=6 event_id=12 site_id=14 request.issue subject=request#0 insn=instruction#3 write=1\n"
-      "eventtrace cycle=6 event_id=13 site_id=16 tick count=9 delta=3\n";
+      "eventtrace cycle=6 event_id=13 site_id=16 tick count=9 delta=3 stamp=0x0000000000000006\n";
   expect(dump == want, "the trace reads back as the pipeline's 14 records:\n" + dump);
 
   // The manifest, in ManifestGen's layout; some of its lines.
@@ -321,6 +322,7 @@ int main(int argc, char** argv) {
            "        {\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"optional\": true, \"role\": \"blocked_by\"},\n",
            "        {\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"optional\": true, \"role\": \"aborted_by\"}\n",
            "        {\"name\": \"level\", \"type\": \"UInt\", \"width\": 4, \"optional\": true}\n",
+           "        {\"name\": \"stamp\", \"type\": \"UInt\", \"width\": 64}\n",
            "        {\"name\": \"cause\", \"type\": \"Enum\", \"enum\": \"TrapCause\", \"width\": 3},\n",
            "        {\"name\": \"result\", \"type\": \"SInt\", \"width\": 8, \"property\": \"setOnce\"}\n",
            "        {\"name\": \"insn\", \"type\": \"Id\", \"object\": \"instruction\", \"property\": \"const\", \"role\": \"parent\"},\n",
@@ -333,7 +335,7 @@ int main(int argc, char** argv) {
 
   if (failures) return 1;
   std::printf("PASS: calls without a trace open do nothing; 16 broken rules stop the run with their messages; the "
-              "pipeline's records are written in site order with blocking sites, causes, values, a parent, and a "
-              "subjectless event, and the reader reads them with the manifest the library wrote beside the trace\n");
+              "pipeline's records are written in site order with blocking sites, causes, values up to 64 bits wide, a "
+              "parent, and a subjectless event, and the reader reads them with the manifest the library wrote beside the trace\n");
   return 0;
 }

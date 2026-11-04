@@ -197,7 +197,11 @@ class UInt {
     return a.v_ <=> b.v_;
   }
   static detail::Type type() { return {detail::Kind::UInt, N, nullptr, nullptr}; }
-  detail::Encoded encoded() const { return {set_, v_, !negative_ && (N == 64 || v_ >> N == 0)}; }
+  detail::Encoded encoded() const {
+    bool fits = !negative_;
+    if constexpr (N < 64) fits = fits && v_ >> N == 0;  // a 64-bit value always fits, and shifting by 64 is undefined
+    return {set_, v_, fits};
+  }
 
  private:
   uint64_t v_ = 0;
