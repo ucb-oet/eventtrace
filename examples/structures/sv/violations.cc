@@ -50,6 +50,8 @@ oet::Event<Cell> find0{"find0"};
 oet::Event<Cell> deq_keep{"deq_keep"};
 oet::Event<Cell> drain{"drain"};
 oet::Event<Cell> forget{"forget"};
+oet::Event<Cell> trim1{"trim1", oet::abort};
+oet::Event<Cell> trim3{"trim3", oet::abort};
 
 namespace {
 
@@ -100,6 +102,9 @@ void declare() {
   call(drain, "drain", [] { for (Cell& c : q.clear()) drain.emit(c); });
   // A clear whose members get no event, so nothing carries their removal.
   call(forget, "forget", [] { q.clear(); });
+  // The youngest one or three members leave.
+  call(trim1, "trim1", [] { for (Cell& c : q.drop_youngest(1)) trim1.emit(c); });
+  call(trim3, "trim3", [] { for (Cell& c : q.drop_youngest(3)) trim3.emit(c); });
 }
 
 struct Scenario {
@@ -184,6 +189,8 @@ int main(int argc, char** argv) {
     {"a queue's lifetime", {{"enq0"}, {"enq1"}, {"deq"}, {"deq"}}, {}, "cell.deq subject=cell#1"},
     {"a queue cleared", {{"enq0"}, {"enq1"}, {"flush"}, {"enq0"}}, {}, "cell.flush subject=cell#1"},
     {"two pops in one cycle", {{"enq0"}, {"enq1"}, {"deq", "deq1"}}, {}, "cell.deq1 subject=cell#1"},
+    {"the youngest member dropped", {{"enq0"}, {"enq1"}, {"trim1"}, {"deq"}}, {}, "cell.deq subject=cell#0"},
+    {"a pop and a drop in one cycle", {{"enq0"}, {"enq1"}, {"deq", "trim1"}}, {}, "cell.trim1 subject=cell#1"},
     {"a ROB's keys wrapping", {{"alloc0"}, {"alloc1"}, {"commit"}, {"alloc2"}, {"commit"}, {"alloc3"}, {"commit"},
      {"alloc0"}}, {}, "cell.alloc0 subject=cell#4 key=0"},
     {"a rollback moving the tail back", {{"alloc0"}, {"alloc1"}, {"squash1"}, {"alloc1"}}, {},
@@ -196,6 +203,8 @@ int main(int argc, char** argv) {
      {"Misuse.q holds 3 members at the end of the cycle, more than its 2 entries"}, nullptr},
     {"a pop and a clear taking one member", {{"enq0"}, {"deq_keep", "drain"}},
      {"cell#0 is removed from Misuse.q twice in one cycle"}, nullptr},
+    {"dropping more members than there are", {{"enq0"}, {"enq1"}, {"trim3"}},
+     {"drop_youngest(3) found only 2 members of Misuse.q"}, nullptr},
     {"a ROB key out of sequence", {{"alloc0"}, {"alloc2"}},
      {"cell#1 joins Misuse.r with key 2, but its tail allocates 1 next"}, nullptr},
     {"a ROB key without a member", {{"alloc0"}, {"find1"}},

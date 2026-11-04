@@ -14,6 +14,7 @@ module Structures (
                                             input byte unsigned slot);
   import "DPI-C" function void oet_execute(input longint cycle, input byte unsigned slot, input byte unsigned tag,
                                            input bit mispredict);
+  import "DPI-C" function void oet_jump(input longint cycle, input byte unsigned younger);
   import "DPI-C" function void oet_mispredict(input longint cycle, input byte unsigned cut, input byte unsigned exe_pc);
   import "DPI-C" function void oet_commit(input longint cycle);
 `endif
@@ -63,7 +64,7 @@ module Structures (
   assign commit  = robValid[headIdx] && robDone[headIdx];
 
   // Dispatch: the fetch queue's head into the ROB's tail and the lowest free slot.
-  logic       anyFree, dispatch, fetch;
+  logic       anyFree, dispatch, jump, fetch;
   logic [1:0] dispSlot;
   logic [7:0] dispPc;
   always_comb begin
@@ -77,9 +78,10 @@ module Structures (
   end
   assign dispPc   = fqPc[fqHead];
   assign dispatch = fqCount != 3'd0 && robCount != 4'd8 && anyFree && !mispredict;
+  assign jump     = dispatch && dispPc[3:0] == 4'd14;
 
   // Fetch: the next PC into the fetch queue's tail.
-  assign fetch = fqCount != 3'd4 && !mispredict;
+  assign fetch = fqCount != 3'd4 && !mispredict && !jump;
 
   always_ff @(posedge clock) begin
     if (reset) begin
@@ -125,10 +127,15 @@ module Structures (
           nextPc                          <= nextPc + 8'd1;
         end
         fqCount <= fqCount + 3'(fetch) - 3'(dispatch);
+        if (jump) begin
+          fqCount <= 3'd0;
+          nextPc  <= dispPc + 8'd3;
+        end
       end
 
       if (fetch)      `OET(oet_fetch(oet_cycle, nextPc))
       if (dispatch)   `OET(oet_dispatch(oet_cycle, 8'(robTail), dispPc, 8'(dispSlot)))
+      if (jump)       `OET(oet_jump(oet_cycle, 8'(3'(fqCount - 3'd1))))
       if (exe)        `OET(oet_execute(oet_cycle, 8'(exeSlot), 8'(exeTag), mispredict))
       if (mispredict) `OET(oet_mispredict(oet_cycle, 8'(cut), exePc))
       if (commit)     `OET(oet_commit(oet_cycle))

@@ -914,8 +914,9 @@ class Collection : public detail::Queries<T, Collection<T>> {
   eventtrace::Collection<T> impl_;
 };
 
-// A FIFO: members join at the tail and leave from the head, or all at once. Declared with `entries`, it may hold at
-// most that many members at the end of a cycle. Queries see the members oldest first.
+// A FIFO: members join at the tail and leave from the head, all at once, or from the tail as its youngest members.
+// Declared with `entries`, it may hold at most that many members at the end of a cycle. Queries see the members
+// oldest first.
 template <class T>
 class Queue : public detail::QueueOps<T, Queue<T>> {
  public:
@@ -928,6 +929,10 @@ class Queue : public detail::QueueOps<T, Queue<T>> {
 
   // o joins the tail with the next event emitted on it.
   void add(T& o);
+
+  // The k youngest members, k being the hardware's count of them, each of which leaves with the next event emitted on
+  // it. The run stops if there are fewer than k.
+  View<T> drop_youngest(std::size_t k);
 
  private:
   friend class detail::Queries<T, Queue>;
@@ -1185,6 +1190,17 @@ void Queue<T>::add(T& o) {
     detail::library().stage_add(site, event, impl_, o);
   });
   detail::touch(o);
+}
+
+template <class T>
+View<T> Queue<T>::drop_youngest(std::size_t k) {
+  const std::string what = std::string(impl_.name()) + ".drop_youngest(" + std::to_string(k) + ")";
+  if (!detail::library().running) detail::fail(what + " is called outside a handler");
+  const std::vector<T*>& members = impl_.members();
+  if (k > members.size())
+    detail::fail("drop_youngest(" + std::to_string(k) + ") found only " + std::to_string(members.size()) +
+                 " members of " + impl_.name());
+  return this->leaving(std::vector<T*>(members.end() - static_cast<std::ptrdiff_t>(k), members.end()), what);
 }
 
 template <class T>

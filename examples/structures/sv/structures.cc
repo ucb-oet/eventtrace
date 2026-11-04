@@ -35,6 +35,7 @@ oet::Event<Insn> insn_commit{"commit", oet::complete};
 
 oet::Call fetch_call{"fetch", {insn_fetch}};
 oet::Call dispatch_call{"dispatch", {insn_dispatch, uop_dispatch}};
+oet::Call jump_call{"jump", {insn_flush}};
 oet::Call execute_call{"execute", {uop_execute, insn_complete}};
 oet::Call mispredict_call{"mispredict", {insn_squash, uop_squash, insn_flush}};
 oet::Call commit_call{"commit", {insn_commit}};
@@ -60,6 +61,13 @@ void oet_dispatch(long long cycle, unsigned char rob_tail, unsigned char pc, uns
     u.insn = i;
     station.add(slot, u);
     uop_dispatch.emit(u);
+  });
+}
+
+// A jump that dispatch resolves: the fetch queue's `younger` entries, fetched after it, leave.
+void oet_jump(long long cycle, unsigned char younger) {
+  oet::at(cycle, jump_call, [=] {
+    for (Insn& i : fetch_queue.drop_youngest(younger)) insn_flush.emit(i);
   });
 }
 

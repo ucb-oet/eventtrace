@@ -167,6 +167,8 @@ any effect:
 - `fetch_queue.pop()` returns the head, and `pop(k)` returns member `k`, for the `k`-th of a cycle's pops. The pops
   of one cycle must take the first members.
 - `fetch_queue.clear()` returns every member, as a view.
+- `fetch_queue.drop_youngest(k)` returns the `k` youngest members of a queue, as a view, `k` being the hardware's
+  count of them. Fewer than `k` members stop the run.
 - `rob.rollback(new_tail)` returns the members from the one with key `new_tail` through the youngest, as a view.
   `new_tail` may also be the key the tail allocates next, which returns none.
 - `station.remove(u)` removes any member of a map, as for a set.
@@ -266,9 +268,9 @@ edge, and an event's effects hold from the next cycle.
 
 - `event.create()` creates the subject of a create event, whose handler then assigns its fields and emits the event
   on it.
-- Assigning a field, as `i.stage = Stage::Execute`, and `add`, `remove`, `pop`, `clear`, and `rollback` on a
-  collection are effects. They wait on the object until an event is emitted on it, which carries the assigned values
-  and applies the effects at the end of the cycle. Effects still waiting when the handler returns stop the run.
+- Assigning a field, as `i.stage = Stage::Execute`, and `add`, `remove`, `pop`, `clear`, `rollback`, and `drop_youngest`
+  on a collection are effects. They wait on the object until an event is emitted on it, which carries the assigned
+  values and applies the effects at the end of the cycle. Effects still waiting when the handler returns stop the run.
 - `emit` writes the event's record. It checks that the record assigns each listed subject field, assigns no other,
   and sets each value that is not optional, and that every value fits its type.
 - An `if` takes the place of `EventTrace.test` and `otherwise`, and a range-for over a view the place of `iter`.
@@ -336,11 +338,12 @@ lifecycle needs a subject; a call has at least one index; a queue, ROB, or map h
 at least as many keys as entries.
 
 While it records, the library checks each handler: the checks of `emit` above; a field assigned outside a handler, a
-`const` field outside its create event, or a field twice before an event; an event the running call does not declare;
-an event other than its create on an object created in the same cycle; an index out of range; a ROB or map key
-with no member, and a rollback to a key that is neither live nor the tail; and the runtime's checks, as for a Chisel build (see [What the runtime checks](annotations.md#what-the-runtime-checks)). A broken rule
-stops the simulation with a message on standard error that names where it broke, by its event and site or its call,
-and the cycle:
+`const` field outside its create event, or a field twice before an event; an event the running call does not declare; an
+event other than its create on an object created in the same cycle; an index out of range; a ROB or map key with no
+member, a rollback to a key that is neither live nor the tail, and a `drop_youngest` of more members than the queue
+holds; and the runtime's checks, as for a Chisel build (see
+[What the runtime checks](annotations.md#what-the-runtime-checks)). A broken rule stops the simulation with a message
+on standard error that names where it broke, by its event and site or its call, and the cycle:
 
 ```
 eventtrace: cell.poke at site 6 (call poke, cycle 1): only found 0 members of Misuse.a.where(...)
@@ -378,7 +381,7 @@ checks that the other build compiles nothing of the trace.
 - A query's message names its view without the predicate's text.
 - A design has two files, tied together by its DPI functions.
 - Every event with a subject has a blocking site, and every `by` is optional in the manifest.
-- `pop`, `clear`, and `rollback` return the members they remove, and the next event emitted on each carries its
-  removal. In Chisel, `pop` returns a handle that takes exactly one event, and the block of `clear` or `rollback`
-  holds exactly one event on its member.
+- `pop`, `clear`, `rollback`, and `drop_youngest` return the members they remove, and the next event emitted on each
+  carries its removal. In Chisel, `pop` returns a handle that takes exactly one event, and the block of `clear`,
+  `rollback`, or `dropYoungest` holds exactly one event on its member.
 - A key is checked when the handler runs, where Chisel checks a literal key at elaboration.
