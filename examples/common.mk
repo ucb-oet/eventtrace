@@ -23,8 +23,8 @@ SBT ?= java -jar $(CHIPYARD_DIR)/scripts/sbt-launch.jar \
 # Chisel's ChiselStage runs the firtool found here.
 export CHISEL_FIRTOOL_PATH ?= $(patsubst %/,%,$(dir $(shell command -v firtool)))
 
-# The frontend's sources include the runtime's C++, which it ships as resources.
-SCALA_SOURCES := $(shell find $(EVENTTRACE_DIR)/frontend/src src -type f)
+# The frontend ships the runtime's C++ as resources, through a link to runtime/src that find does not follow.
+SCALA_SOURCES := $(shell find $(EVENTTRACE_DIR)/frontend/src $(EVENTTRACE_DIR)/runtime/src src -type f)
 
 # The reader's command, which Cargo rebuilds when the reader or the trace format changes.
 READER_DIR := $(EVENTTRACE_DIR)/reader

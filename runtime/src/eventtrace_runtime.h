@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -106,6 +107,9 @@ class TraceWriter {
 // Takes each record of a cycle in any order. Once the cycle is complete, it handles them in site-ID order, which
 // is elaboration order, and numbers events and new objects as it goes, so their IDs and the output order never
 // depend on the order in which a simulator delivered the records.
+//
+// A record is either a payload, which the Chisel flow's sinks send and the generated half decodes, or a handler,
+// which the C++ library queues and which emits its events itself.
 class Runtime {
  public:
   explicit Runtime(Sites& sites);
@@ -126,6 +130,13 @@ class Runtime {
   // during the call. A cycle is complete once a record from a later cycle arrives or finish() is called.
   void accept(long long cycle, unsigned site, const uint32_t* payload, unsigned words);
 
+  // Takes one handler, run once the cycle is complete: after the cycle's payload records and before its commit, in
+  // ascending `order`, with equal orders in the order they arrived.
+  void queue(long long cycle, unsigned order, std::function<void()> handler);
+
+  // Whether a file is open; until one is, every record is ignored, so a producer may skip building it.
+  bool is_open() const { return out_ != nullptr; }
+
   // Handles the last cycle. Later calls do nothing, so every sink may call it when the simulation ends.
   void finish();
 
@@ -144,6 +155,9 @@ class Runtime {
   // earlier cycles are already out, and continuing would need a guess about which effect wins.
   [[noreturn]] void violation(unsigned site, const char* format, ...) const;
 
+  // Stops the run with a message, after writing out the records of earlier cycles.
+  [[noreturn]] void fail(const char* format, ...) const;
+
  private:
   struct Record {
     unsigned site;
@@ -153,7 +167,6 @@ class Runtime {
   void flush();
   Trigger parse_trigger(const char* plusarg, const char* spec) const;
   void watch();
-  [[noreturn]] void fail(const char* format, ...) const;
 
   Sites& sites_;
   std::FILE* out_ = nullptr;  // null until open()
@@ -161,6 +174,7 @@ class Runtime {
   long long cycle_ = -1;  // the cycle being buffered; -1 before the first record
   std::vector<Record> records_;
   std::vector<uint32_t> words_;
+  std::vector<std::pair<unsigned, std::function<void()>>> handlers_;  // with their orders
   unsigned long long next_event_id_ = 0;
   std::vector<unsigned long long> next_object_ids_;
   bool finished_ = false;

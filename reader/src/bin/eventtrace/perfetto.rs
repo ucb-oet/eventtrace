@@ -326,7 +326,7 @@ fn convert<W: Write>(
                     e.get(manifest, key).map(|v| text::value(manifest, field, v).to_string())
                         .ok_or_else(|| Error(format!("counter {} has an absent key {key}", counter.event)))
                 }).collect::<Result<Vec<_>>>()?;
-                let scope = manifest.sites.iter().find(|s| s.site_id == e.site_id).map(|s| s.instance.as_str()).unwrap_or("");
+                let scope = manifest.sites.iter().find(|s| s.site_id == e.site_id).and_then(|s| s.instance.as_deref()).unwrap_or("");
                 let key = (e.event, scope.to_string(), keys.clone());
                 let track = match counter_tracks.get(&key) {
                     Some(&track) => track,

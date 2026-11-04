@@ -16,3 +16,8 @@ check-rejects:
 check: check-disabled
 check-disabled:
 	cd $(EVENTTRACE_DIR) && $(SBT) "$(SBT_PROJECT)/runMain eventtrace.examples.stage1.Disabled"
+
+# The SystemVerilog version: Conditional.sv and its C++, checked by the same check.awk.
+SV_SOURCES := sv/Conditional.sv
+SV_CC      := sv/conditional.cc
+include ../sv.mk

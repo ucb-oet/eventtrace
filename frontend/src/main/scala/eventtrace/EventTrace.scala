@@ -288,7 +288,7 @@ object EventTrace {
       case Left(untyped) => throw new IllegalArgumentException(untyped.mkString("; "))
     }
 
-  /** The runtime and DPI adapter, shipped in the frontend's resources. */
+  /** The runtime and DPI adapter, shipped in the frontend's resources, which link to `runtime/src`. */
   private val RuntimeSources = Seq("eventtrace_runtime.h", "eventtrace_runtime.cc", "eventtrace_tracker.h", "eventtrace_dpi.cc")
 
   /** Makes the elaboration's first sink carry everything the simulator compiles besides the RTL: the runtime sources

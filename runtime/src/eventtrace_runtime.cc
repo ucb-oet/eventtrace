@@ -129,6 +129,17 @@ void Runtime::accept(long long cycle, unsigned site, const uint32_t* payload, un
   words_.insert(words_.end(), payload, payload + words);
 }
 
+void Runtime::queue(long long cycle, unsigned order, std::function<void()> handler) {
+  if (!out_) return;
+  if (finished_) fail("handler %u at cycle %lld arrived after the stream ended", order, cycle);
+  if (cycle < cycle_) fail("handler %u at cycle %lld arrived after cycle %lld began", order, cycle, cycle_);
+  if (cycle > cycle_) {
+    flush();
+    cycle_ = cycle;
+  }
+  handlers_.emplace_back(order, std::move(handler));
+}
+
 void Runtime::finish() {
   if (finished_) return;
   flush();
@@ -151,6 +162,8 @@ void Runtime::flush() {
     if (i > 0 && records_[i - 1].site == r.site) fail("site %u fired twice in cycle %lld", r.site, cycle_);
     sites_.handle(*this, r.site, words_.data() + r.offset);
   }
+  std::stable_sort(handlers_.begin(), handlers_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (const auto& h : handlers_) h.second();
   sites_.commit(*this);
   const std::string record = writer_.take_cycle(cycle_);
   const auto fires = [this](const Trigger& t) {
@@ -170,6 +183,7 @@ void Runtime::flush() {
   watch();
   records_.clear();
   words_.clear();
+  handlers_.clear();
 }
 
 // Matches events against only the event triggers that can still fire.

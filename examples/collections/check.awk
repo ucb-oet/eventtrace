@@ -6,6 +6,11 @@
 # order is ID order, and before each edge the collection holds exactly the instructions in writeback, execute, and
 # decode, oldest first. Within a cycle, records follow site order, and each site's records follow its view's order.
 # A record whose test fails is dropped and takes no event ID, so event IDs count only the records expected here.
+#
+# Sites 0 to 15 below are the Chisel build's. The C++ library, for the SystemVerilog version, gives each event with a
+# subject a blocking site after its own, so its sites table groups into the same 16: a site that blocks right after
+# one of the same event that does not is that one's twin. A record that finds its subject blocked is at its group's
+# blocking site. The C++ library also marks every by field optional.
 function fail(message) {
   print "FAIL: " message
   bad = 1
@@ -14,7 +19,7 @@ function fail(message) {
 # One expected record of instruction `id` at site `site`; `fields` are its fields sorted by name, if any.
 function emit(site, name, id, fields) {
   want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d instruction.%s subject=instruction#%d%s",
-                    k + 3, m, site, name, id, fields == "" ? "" : " " fields)
+                    k + 3, m, name == "stall" ? blocking[site] : plain[site], name, id, fields == "" ? "" : " " fields)
   m++
   seen[name]++
 }
@@ -22,20 +27,28 @@ function emit(site, name, id, fields) {
 # One expected record of request `id` at site `site`; `fields` are its fields sorted by name, if any.
 function emit_request(site, name, id, fields) {
   want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d request.%s subject=request#%d%s",
-                    k + 3, m, site, name, id, fields == "" ? "" : " " fields)
+                    k + 3, m, plain[site], name, id, fields == "" ? "" : " " fields)
   m++
   seen["request." name]++
 }
 
 # One expected record of the subject-less event "idle".
 function emit_idle(site) {
-  want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d idle count=%d", k + 3, m, site, k)
+  want[m] = sprintf("eventtrace cycle=%d event_id=%d site_id=%d idle count=%d", k + 3, m, plain[site], k)
   m++
   seen["idle"]++
 }
 
 FNR == NR {
   manifest = manifest $0 "\n"
+  if (match($0, /"site_id": [0-9]+/)) {
+    id = substr($0, RSTART + 11, RLENGTH - 11) + 0
+    match($0, /"event_name": "[^"]*"/); event = substr($0, RSTART + 15, RLENGTH - 16)
+    blocks = index($0, "\"blocks\": true") > 0
+    if (blocks && groups && event == last_event && !last_blocks) blocking[groups - 1] = id
+    else { plain[groups] = id; blocking[groups] = id; groups++ }
+    last_event = event; last_blocks = blocks
+  }
   next
 }
 
@@ -98,20 +111,28 @@ END {
     if (request_done) pending = 0
   }
 
+  if (groups != 16) fail("expected the sites table to group into 16 sites, got " groups + 0)
   if (n != m) fail("expected " m " records, got " n)
   for (i = 0; i < m && i < n; i++)
     if (got[i] != want[i]) { fail("record " i ": expected \"" want[i] "\", got \"" got[i] "\""); break }
 
+  # Each entry's alternatives are separated by &.
   split("\"name\": \"instruction.retire\",|\"lifecycle\": \"complete\",|\"lifecycle\": \"abort\",|" \
-        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"role\": \"blocked_by\"}|" \
-        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"role\": \"aborted_by\"}|" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"role\": \"blocked_by\"}&" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"optional\": true, \"role\": \"blocked_by\"}|" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"role\": \"aborted_by\"}&" \
+        "{\"name\": \"by\", \"type\": \"Id\", \"object\": \"instruction\", \"optional\": true, \"role\": \"aborted_by\"}|" \
         "{\"name\": \"insn\", \"type\": \"Id\", \"object\": \"instruction\", \"property\": \"const\", \"role\": \"parent\"}|" \
         "\"event_name\": \"instruction.stall\", |\"blocks\": true}|" \
         "\"name\": \"request.issue\",|{\"name\": \"insn\", \"type\": \"Id\", \"object\": \"instruction\"}|" \
         "{\"name\": \"stage\", \"type\": \"Enum\", \"enum\": \"Stage\", \"width\": 2}|" \
         "{\"name\": \"Stage\", \"values\": {\"Decode\": 0, \"Execute\": 1, \"Writeback\": 2}}", entries, "|")
-  for (i in entries)
-    if (!index(manifest, entries[i])) fail("the manifest lacks " entries[i])
+  for (i in entries) {
+    found = 0
+    alternatives = split(entries[i], alternative, "&")
+    for (a = 1; a <= alternatives; a++) if (index(manifest, alternative[a])) found = 1
+    if (!found) fail("the manifest lacks " entries[i])
+  }
   split("decode issue writeback retire squash stall sample second youngest busy crowd idle request.issue request.done pick",
         names, " ")
   for (i in names)

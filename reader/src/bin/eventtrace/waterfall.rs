@@ -131,8 +131,8 @@ fn convert<W: Write>(
     let mut file = pb::Waterfall { version: FORMAT_VERSION, title, ..Default::default() };
     for site in &manifest.sites {
         let event = texts.get(&site.event_name);
-        let instance = texts.get(&site.instance);
-        let source = texts.get(&site.source);
+        let instance = texts.get(site.instance.as_deref().unwrap_or_default());
+        let source = texts.get(site.source.as_deref().unwrap_or_default());
         file.sites.push(pb::Site { event, instance, source, blocks: site.blocks });
     }
     let mut drawn: IndexMap<&str, Drawn> = IndexMap::new();

@@ -5,6 +5,8 @@
 - [Writing annotations](annotations.md): events, object types, creating and changing objects, collections, queries,
   and the rules that elaboration and the runtime check.
 - [Sharing collections between modules](sharing-collections.md): passing a collection to the modules that use it.
+- [Annotating SystemVerilog](systemverilog.md): tracing a SystemVerilog design through DPI calls and `oet`, the C++
+  library with the same model.
 - [Using EventTrace in Chipyard](chipyard.md): enabling tracing, running a simulation, and recording a window of it.
   It also covers other flows.
 - [Reading traces](reader.md): the `eventtrace` command, its text output, and the view files that its converters
