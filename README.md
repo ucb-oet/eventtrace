@@ -1,3 +1,5 @@
+<!-- EventTrace's front page: what it is, how the repository is laid out, and how to build and check it. -->
+
 # EventTrace
 
 EventTrace records hardware events from annotations in Chisel generators, such as each instruction's pass through a
@@ -35,19 +37,23 @@ when (retire) {
 }
 ```
 
-The [documentation](docs/README.md) covers writing annotations, using EventTrace in Chipyard, reading traces, and the
-trace and manifest formats.
+A SystemVerilog design is traced through DPI calls to its own C++, which uses `oet`, a C++ library with the same
+model; see [Annotating SystemVerilog](docs/systemverilog.md).
+
+The [documentation](docs/README.md) covers writing annotations, annotating SystemVerilog, using EventTrace in
+Chipyard, reading traces, and the trace and manifest formats.
 
 ## Layout
 
 | Directory | Contents |
 |---|---|
 | `frontend/` | The Chisel library. It also ships the runtime's C++, which elaboration writes next to the RTL. |
-| `runtime/` | Tests of the runtime, which need no simulator. |
+| `runtime/` | The runtime's C++, in `src/`, which the Chisel and SystemVerilog flows share, and its tests, which need no simulator. |
+| `systemverilog/` | `oet`, the C++ library for SystemVerilog designs; `oet.svh`, the macros a design calls it through; and the library's tests, which need no simulator. |
 | `proto/eventtrace.proto` | The trace format. |
 | `python/` | The standalone Python producer package and its interoperability tests. |
 | `reader/` | The `eventtrace` command, in Rust: `dump`, `perfetto`, and `waterfall`. Also the view files for Rocket, Saturn, Sodor, and native NPU models. |
-| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. |
+| `examples/` | Small designs that elaborate, simulate, and check their traces, and check the library's elaboration errors. Each has a SystemVerilog version in `sv/`. |
 | `docs/` | The documentation. |
 
 ## Use in Chipyard
@@ -81,7 +87,8 @@ Verilator). Cargo must also be installed, for the reader.
 
 ```sh
 make -C runtime test
-make -C examples/collections check    # likewise stage0, stage1, and objects
+make -C systemverilog test
+make -C examples/collections check    # likewise stage0, stage1, objects, and structures
 ```
 
 This directory's `build.sbt` builds the frontend and the examples on their own. It uses Chipyard's sbt launcher and

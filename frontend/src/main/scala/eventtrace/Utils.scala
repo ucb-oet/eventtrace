@@ -1,3 +1,4 @@
+/* Hardware helpers for instrumentation: one-cycle pulses at the start or end of each run of a condition. */
 package eventtrace
 
 import chisel3._
@@ -25,6 +26,9 @@ object Utils {
   /** High on the first cycle after each run of `c`: `c` is low and was high on the previous cycle. */
   def falling(c: Bool)(implicit sourceInfo: SourceInfo): Bool = edge("falling", !c && RegNext(c, false.B))
 
+  /** Builds `build`, the edge `Utils.<name>` returns, after checking that the call is inside a module and outside
+    * any `when`, and that no event is evaluating it again as part of its enable; otherwise stops elaboration.
+    */
   private def edge(name: String, build: => Bool)(implicit sourceInfo: SourceInfo): Bool = {
     if (EventTrace.computingEnable.value)
       EventTrace.elaborationError(

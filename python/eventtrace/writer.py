@@ -11,6 +11,7 @@ from .schema import U64, Lifecycle, TracedObject, field
 
 
 def varint(value):
+    """Encodes a non-negative integer as a protobuf varint."""
     out = bytearray()
     while value >= 128:
         out.append((value & 127) | 128)
@@ -20,14 +21,17 @@ def varint(value):
 
 
 def integer(tag, value):
+    """A varint field numbered `tag`, or nothing for 0, which proto3 leaves out."""
     return varint(tag << 3) + varint(value) if value else b""
 
 
 def message(tag, data):
+    """A length-delimited field numbered `tag`, holding `data`."""
     return varint(tag << 3 | 2) + varint(len(data)) + data
 
 
 def record(tag, data):
+    """A Record holding `data` as its field `tag`, preceded by its length."""
     payload = message(tag, data)
     return varint(len(payload)) + payload
 
@@ -40,6 +44,13 @@ class Writer:
     """
 
     def __init__(self, path, *, sources, manifest_path=None, instruction_text=None):
+        """Writes the manifest of `sources`, (class, scope) pairs, and opens the trace.
+
+        The manifest goes to `manifest_path`, by default the trace's path without any
+        .gz, plus .json; `instruction_text` goes into it as given. The trace, gzipped
+        if `path` ends in .gz, starts with its header. Raises for a declaration it
+        cannot record, such as a conflicting or duplicate one.
+        """
         self.path = Path(path)
         plain = str(self.path).removesuffix(".gz")
         self.manifest_path = Path(manifest_path or plain + ".json")
@@ -174,6 +185,11 @@ class Writer:
         self._cycle_field = field("cycle", U64)
 
     def _emit(self, source, descriptor, cycle, values):
+        """Encodes one event of `source` and buffers it with the events of its cycle.
+
+        Cycles must not decrease; a later cycle writes out the buffered one first. The
+        event is checked whole before anything is written.
+        """
         if self._closed:
             raise ValueError("trace writer is closed")
         cycle = self._cycle_field.encode(cycle)
@@ -208,6 +224,7 @@ class Writer:
         self._events.append((site, message(2, data)))
 
     def _flush_cycle(self):
+        """Writes the buffered events as one Cycle record, in site order."""
         if self._events:
             data = integer(1, self._cycle) + b"".join(
                 data for _, data in sorted(self._events, key=lambda e: e[0])
@@ -221,6 +238,7 @@ class Writer:
             self._out.flush()
 
     def close(self):
+        """Writes the last cycle and closes the trace; a second call does nothing."""
         if not self._closed:
             try:
                 self._flush_cycle()
@@ -229,7 +247,9 @@ class Writer:
                 self._out.close()
 
     def __enter__(self):
+        """Returns the writer, for a with block."""
         return self
 
     def __exit__(self, *_):
+        """Closes the trace, whether or not the block raised."""
         self.close()

@@ -1,3 +1,5 @@
+/* The black box behind every site: a sink whose SystemVerilog hands each enabled cycle's payload to the runtime
+ * through DPI. */
 package eventtrace
 
 import chisel3._
@@ -25,13 +27,21 @@ private[eventtrace] class EventTraceSink(siteId: Int, words: Int)
   val enable  = IO(Input(Bool()))
   val payload = Option.when(words > 0)(IO(Input(UInt((32 * words).W))).suggestName("payload"))
 
+  /** One module per payload size, which the sinks of that size share, each with its own `SITE_ID`. */
   override def desiredName: String = EventTraceSink.moduleName(words)
   setInline(s"$desiredName.sv", EventTraceSink.verilog(words))
 }
 
+/** The sink modules' names and SystemVerilog, one per payload size. */
 private[eventtrace] object EventTraceSink {
+
+  /** The name of the sink module for payloads of `words` 32-bit words. */
   def moduleName(words: Int): String = s"EventTraceSink_W$words"
 
+  /** The SystemVerilog of the sink module for payloads of `words` words: it opens the trace when the simulation
+    * starts, passes the cycle, its site ID, and any payload to `eventtrace_emit_w<words>` on each clock edge that
+    * finds it enabled and out of reset, and finishes the trace when the simulation ends.
+    */
   def verilog(words: Int): String = {
     val name = moduleName(words)
     val bits = 32 * words

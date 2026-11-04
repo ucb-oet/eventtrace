@@ -1,6 +1,8 @@
-// Generates Rust types from the trace format, eventtrace.proto, and from the formats the commands write: the part of
-// Perfetto's that the converter uses, and illilouette's waterfall. protox compiles the schemas in Rust, so that
-// building needs no protoc.
+//! Generates Rust types from the trace format, eventtrace.proto, and from the formats the commands write: the part of
+//! Perfetto's that the converter uses, and illilouette's waterfall. protox compiles the schemas in Rust, so that
+//! building needs no protoc.
+
+/// Compiles the three schemas into OUT_DIR, where the crate includes them, and has Cargo rerun this when one changes.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=../proto/eventtrace.proto");
     println!("cargo:rerun-if-changed=proto/perfetto.proto");

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use eventtrace::{Error, Result};
 use rvdasm::disassembler::{self, Xlen};
 
+/// A disassembler for one ISA, which keeps each instruction's text by its bits and PC.
 pub struct Disassembler {
     rvdasm: disassembler::Disassembler,
     compressed: bool,
@@ -14,6 +15,8 @@ pub struct Disassembler {
 }
 
 impl Disassembler {
+    /// A disassembler for the ISA string `isa`, of which only XLEN and the C extension matter. Fails if `isa` does not
+    /// start with rv32 or rv64.
     pub fn new(isa: &str) -> Result<Self> {
         let isa = isa.to_lowercase();
         let xlen = match isa.get(..4) {
@@ -36,10 +39,12 @@ impl Disassembler {
         &self.cache[&(bits, pc)]
     }
 
+    /// The text of `bits` at `pc`, as `text` describes it, without the cache.
     fn disassemble(&self, bits: u64, pc: u64) -> String {
         // With the C extension, an instruction whose low two bits are not 11 is compressed, in the low half; without
         // it, there is no such instruction.
         let size = if bits & 3 == 3 { 4 } else { 2 };
+        // The text of an instruction that does not decode, with its bits in hex.
         let unknown = || format!("unknown 0x{bits:0width$x}", width = 2 * size);
         if size == 2 && !self.compressed {
             return unknown();

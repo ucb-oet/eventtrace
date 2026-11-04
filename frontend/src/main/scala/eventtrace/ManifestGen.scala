@@ -1,3 +1,5 @@
+/* Writes the manifest: the JSON description of a design's events, object types, enums, and sites that every tool
+ * reading its traces needs. */
 package eventtrace
 
 /** Generates the manifest for tools outside the simulator: what consumers see.
@@ -13,8 +15,14 @@ package eventtrace
   * does not travel through firtool; see [[EventTrace.manifest]].
   */
 private[eventtrace] object ManifestGen {
+
+  /** The manifest of one elaboration, as JSON text, from its event schemas, its sites with every field typed, and
+    * its object types.
+    */
   def json(events: Seq[EventSchema], sites: Seq[SiteLayout], objectTypes: Seq[ObjectTypeInfo]): String = {
-    // A field's name and type; an object ID names its object type instead of a width.
+    /** A field's name and type; an object ID names its object type instead of a width. `more` holds any further
+      * members, each starting with a comma.
+      */
     def field(name: String, t: FieldType, more: String): String = {
       val detail = t.idOf match {
         case Some(o) => s""", "object": ${quote(o)}"""
@@ -22,6 +30,7 @@ private[eventtrace] object ManifestGen {
       }
       s"""        {"name": ${quote(name)}, "type": "${t.kind}"$detail$more}"""
     }
+    /** A JSON array of `items`, one per line, or `[]` when there are none. */
     def list(items: Seq[String]): String = if (items.isEmpty) "[]" else items.mkString("[\n", ",\n", "\n      ]")
     val entries = events.map { e =>
       val fields = e.fields.map { f =>
@@ -85,6 +94,7 @@ private[eventtrace] object ManifestGen {
       .map(b => f"${b & 0xff}%02x")
       .mkString
 
+  /** `s` as a JSON string, with quotes, backslashes, and control characters escaped. */
   private def quote(s: String): String = s.flatMap {
     case '"'           => "\\\""
     case '\\'          => "\\\\"

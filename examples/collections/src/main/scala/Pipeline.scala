@@ -1,3 +1,5 @@
+/* Collections fixture: a pipeline whose instructions are tracked through queries on one collection, its object types,
+ * and the main that elaborates it with tracing on. */
 package eventtrace.examples.collections
 
 import chisel3._
@@ -8,10 +10,14 @@ import eventtrace.EventTrace.syntax._
 
 import java.nio.file.{Files, Paths}
 
+/** The stage an instruction is in, which its `stage` field holds. */
 object Stage extends ChiselEnum {
   val Decode, Execute, Writeback = Value
 }
 
+/** An instruction, from decode until it retires or is squashed: its PC, whether the PC is odd, its stage, and the
+  * result writeback gives it.
+  */
 class Instruction extends EventTrace.ObjectType("instruction") {
   val pc     = const(UInt(8.W))
   val odd    = const(Bool())
@@ -19,6 +25,9 @@ class Instruction extends EventTrace.ObjectType("instruction") {
   val result = setOnce(UInt(8.W))
 }
 
+/** A request that the instruction in execute issues, done two cycles later. It keeps the issuing instruction's ID for
+  * life, even after that instruction retires.
+  */
 class Request extends EventTrace.ObjectType("request") {
   val insn = parent(new Instruction)  // the instruction that issued it
 }
@@ -142,6 +151,9 @@ class Pipeline extends Module {
   }
 }
 
+/** Elaborates [[Pipeline]] with tracing on into the directory given as the first argument, `build/rtl` by default,
+  * then writes the manifest there.
+  */
 object Main extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/rtl")

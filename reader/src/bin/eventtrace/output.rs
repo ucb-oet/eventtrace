@@ -12,6 +12,7 @@ pub fn create(path: &Path) -> Result<BufWriter<File>> {
     Ok(BufWriter::new(file))
 }
 
+/// A failed write to the output as a message for the user.
 pub fn error(e: io::Error) -> Error {
     Error(format!("cannot write the output: {e}"))
 }

@@ -1,3 +1,5 @@
+/* What elaboration records of each site: its fields' types and sources, its payload layout and handler plan, and
+ * the schema its event shows consumers, from which the manifest and the generated C++ are written. */
 package eventtrace
 
 import chisel3.experimental.BaseModule
@@ -11,6 +13,8 @@ private[eventtrace] case class FieldType(
   isBool:  Boolean,
   enumDef: Option[EnumDef],
   idOf:    Option[String] = None) {
+
+  /** The manifest's name for the field's kind: `Id`, `Enum`, `Bool`, `SInt`, or `UInt`. */
   def kind: String =
     if (idOf.isDefined) "Id" else if (enumDef.isDefined) "Enum" else if (isBool) "Bool" else if (signed) "SInt" else "UInt"
 
@@ -19,6 +23,7 @@ private[eventtrace] case class FieldType(
     idOf.map(t => s"Id<$t>").orElse(enumDef.map(_.name)).getOrElse(if (isBool) "Bool" else s"$kind<$width>")
 }
 
+/** Field types built from a name rather than from a Chisel type. */
 private[eventtrace] object FieldType {
 
   /** The ID of an object of type `objectType`, which the runtime counts in 64 bits. */
@@ -48,10 +53,20 @@ private[eventtrace] case class FieldLayout(
   tpe:    Option[FieldType],
   source: FieldSource,
   role:   Option[FieldRole] = None) {
+
+  /** The field's type; an internal error for an event-local field that [[EventSchema.resolve]] has not typed yet. */
   private def resolved: FieldType = tpe.getOrElse(throw new IllegalStateException(s"field $name has no type yet"))
+
+  /** The type's width in bits. */
   def width: Int = resolved.width
+
+  /** Whether the field is an `SInt`. */
   def signed: Boolean = resolved.signed
+
+  /** The field's enum, for a `ChiselEnum` field. */
   def enumDef: Option[EnumDef] = resolved.enumDef
+
+  /** The type's name as diagnostics and comments show it, or `Absent` while the field has no type. */
   def typeName: String = tpe.map(_.typeName).getOrElse("Absent")
 }
 
@@ -106,10 +121,15 @@ private[eventtrace] case class SitePlan(
 
 /** One handle a site resolves, as bound when the site was elaborated. */
 private[eventtrace] case class HandlePlan(handle: ObjectType, binding: Binding) {
+
+  /** The handle's object type, which names its struct in the generated C++. */
   def typeName: String = handle.typeName
 }
 
+/** How sites name their events. */
 private[eventtrace] object SiteLayout {
+
+  /** An event's name as consumers see it: `packet.arrive` for the event `arrive` on a `packet`, else `written`. */
   def qualifiedName(subject: Option[String], written: String): String = subject.fold(written)(s => s"$s.$written")
 }
 
@@ -126,6 +146,7 @@ private[eventtrace] case class EventSchema(
   roles:     Map[String, FieldRole],
   sites:     Seq[SiteLayout])
 
+/** Builds the event schemas of one elaboration from its sites. */
 private[eventtrace] object EventSchema {
 
   /** Gives each event-local field left `Absent` the type its namesake sites declare. Sites sharing a name were

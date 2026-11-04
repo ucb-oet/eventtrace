@@ -1,3 +1,5 @@
+/* The EventTrace object: the annotation API that designs call, and the elaboration that turns their blocks into
+ * sites, sinks, the manifest, and the generated C++. */
 package eventtrace
 
 import chisel3._
@@ -31,6 +33,9 @@ import scala.util.DynamicVariable
 object EventTrace {
   type ObjectType = eventtrace.ObjectType
   type Collection[T <: eventtrace.ObjectType] = eventtrace.Collection[T]
+  type Queue[T <: eventtrace.ObjectType] = eventtrace.Queue[T]
+  type Rob[T <: eventtrace.ObjectType] = eventtrace.Rob[T]
+  type MapCollection[T <: eventtrace.ObjectType] = eventtrace.MapCollection[T]
 
   /** Each field decodes into a C++ scalar, so it is at most this wide; a payload may span any number of words. */
   val MaxFieldBits = 64
@@ -65,6 +70,8 @@ object EventTrace {
     tpe:   Option[FieldType],
     field: Option[ObjectField],
     role:  Option[FieldRole] = None) {
+
+    /** Whether the entry assigns a field of the subject, rather than capturing an event-local value. */
     def objectField: Boolean = field.isDefined
   }
 
@@ -84,8 +91,14 @@ object EventTrace {
 
   private val openEvent = new DynamicVariable[Option[OpenEvent]](None)
 
-  /** The member handle of the `iter` block whose body is running. */
-  private val openIter = new DynamicVariable[Option[ObjectType]](None)
+  /** An `iter` block whose body is running: its member handle, and for the block of a `rollback`, `clear`, or
+    * `dropYoungest`, the queue its member leaves and the number of events the block has declared so far.
+    */
+  private class OpenIter(val member: ObjectType, val leaves: Option[CollectionInfo]) {
+    var events = 0
+  }
+
+  private val openIter = new DynamicVariable[Option[OpenIter]](None)
 
   /** The tests gating the sites declared now, outermost first. */
   private val openGuards = new DynamicVariable[Seq[Guard]](Seq.empty)
@@ -107,8 +120,18 @@ object EventTrace {
 
     val collections = mutable.ArrayBuffer.empty[CollectionInfo]
 
+    /** Every handle that `pop` returned, in order; see [[popping]]. */
+    val pops = mutable.ArrayBuffer.empty[PendingPop]
+
     /** Whether a sink carries the generated files yet; see [[carryFiles]]. */
     var carried = false
+  }
+
+  /** A handle that `what`, a queue's or ROB's `pop`, returned: the one event declared on it carries its removal from
+    * `info`, and `carrier` is that event's location once it is declared.
+    */
+  private class PendingPop(val handle: ObjectType, val info: CollectionInfo, val what: String, val sourceInfo: SourceInfo) {
+    var carrier: Option[String] = None
   }
 
   private var latest: Option[Declarations] = None
@@ -123,9 +146,16 @@ object EventTrace {
     }
   }
 
+  /** The current elaboration's sites, in ID order. */
   private def siteLayouts = declarations.siteLayouts
+
+  /** The current elaboration's enums, by simple name. */
   private def enums = declarations.enums
+
+  /** The current elaboration's object types, by name. */
   private def objectTypes = declarations.objectTypes
+
+  /** The current elaboration's collections, in declaration order, which is their index order. */
   private def collections = declarations.collections
 
   private var tracing = false
@@ -157,18 +187,56 @@ object EventTrace {
     * collection; modules share one by passing it, as a constructor parameter or through a `Parameters` key bound in
     * the parent.
     */
-  def collection[T <: ObjectType](gen: => T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Collection[T] = {
+  def collection[T <: ObjectType](gen: => T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Collection[T] =
+    new Collection(declare(gen, CollectionKind.Set, name.value, sourceInfo), () => gen)
+
+  /** Declares a queue of objects of `gen`'s type in the current module, with no capacity: members join at the tail
+    * and leave from the head, or all at once. It is shared as a collection is.
+    */
+  def queue[T <: ObjectType](gen: => T)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Queue[T] =
+    new Queue(declare(gen, CollectionKind.Queue(0), name.value, sourceInfo), () => gen)
+
+  /** Declares a queue that holds at most `entries` members at the end of each cycle. */
+  def queue[T <: ObjectType](gen: => T, entries: Int)(implicit name: sourcecode.Name, sourceInfo: SourceInfo): Queue[T] = {
+    if (entries < 1) elaborationError(s"queue ${name.value} has $entries entries; a queue has at least 1", sourceInfo)
+    new Queue(declare(gen, CollectionKind.Queue(entries), name.value, sourceInfo), () => gen)
+  }
+
+  /** Declares a ROB of objects of `gen`'s type in the current module: a queue of at most `entries` members whose tail
+    * allocates keys, as a reorder buffer's tail allocates tags. Keys count modulo `keys`, the size of the tag space:
+    * 32 for 16 entries tagged with a wrap bit, or `entries` for tags without one.
+    */
+  def rob[T <: ObjectType](gen: => T, entries: Int, keys: Int)(implicit name: sourcecode.Name, sourceInfo: SourceInfo)
+    : Rob[T] = {
+    if (entries < 1) elaborationError(s"ROB ${name.value} has $entries entries; a ROB has at least 1", sourceInfo)
+    if (keys < entries)
+      elaborationError(s"ROB ${name.value} has $keys keys for $entries entries; it needs a key for each entry", sourceInfo)
+    new Rob(declare(gen, CollectionKind.Rob(entries, keys), name.value, sourceInfo), () => gen)
+  }
+
+  /** Declares a map of objects of `gen`'s type in the current module: members under keys below `entries` that the
+    * hardware chooses, as from a free list.
+    */
+  def map[T <: ObjectType](gen: => T, entries: Int)(implicit name: sourcecode.Name, sourceInfo: SourceInfo)
+    : MapCollection[T] = {
+    if (entries < 1) elaborationError(s"map ${name.value} has $entries entries; a map has at least 1", sourceInfo)
+    new MapCollection(declare(gen, CollectionKind.Map(entries), name.value, sourceInfo), () => gen)
+  }
+
+  /** Registers a collection of `kind` holding objects of `gen`'s type, declared as `valName` in the current module. */
+  private def declare(gen: => ObjectType, kind: CollectionKind, valName: String, sourceInfo: SourceInfo): CollectionInfo = {
     val module = Module.currentModule.getOrElse(
       elaborationError(
-        s"collection ${name.value} is declared outside a module; declare it in a module and pass it to the others",
+        s"collection $valName is declared outside a module; declare it in a module and pass it to the others",
         sourceInfo
       )
     )
+    // An object type builds Chisel types, so it is constructed only once the declaration is known to be in a module.
     val sample = gen
     registerObjectType(sample, sourceInfo)
-    val info = new CollectionInfo(collections.length, sample.typeName, module, name.value)
+    val info = new CollectionInfo(collections.length, sample.typeName, module, valName, kind)
     collections += info
-    new Collection(info, () => gen)
+    info
   }
 
   /** Creates an object of `gen`'s type on every clock edge at which the enclosing `when` conditions hold, as the create
@@ -200,13 +268,49 @@ object EventTrace {
   }
 
   /** Runs an `iter` block with `member` standing for every member of `view`; see [[View.iter]]. */
-  private[eventtrace] def iter[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit = if (tracing) {
-    if (openIter.value.isDefined) elaborationError("iter is nested inside another iter block, which is not supported", sourceInfo)
+  private[eventtrace] def iter[T <: ObjectType](view: ViewExpr, member: T, sourceInfo: SourceInfo)(body: T => Unit): Unit =
+    if (tracing) runIter("iter", view, member, None, sourceInfo)(body)
+
+  /** Runs the block of a queue's `clear` or `dropYoungest` or a ROB's `rollback`, `what`, as an `iter` block over
+    * `view`, the members that leave. Its one event carries each member's removal.
+    */
+  private[eventtrace] def leaving[T <: ObjectType](view: ViewExpr, member: T, what: String, sourceInfo: SourceInfo)(
+    body: T => Unit
+  ): Unit = if (tracing) {
+    val iter = runIter(what, view, member, Some(view.collection), sourceInfo)(body)
+    if (iter.events != 1)
+      elaborationError(
+        s"$what's block declares ${iter.events} events; it must hold exactly one event on its member, which carries " +
+          "the member's removal",
+        sourceInfo
+      )
+  }
+
+  /** Records that `handle`, which `what` returned, leaves the head of `info` with the one event declared on it. */
+  private[eventtrace] def popping(handle: ObjectType, info: CollectionInfo, what: String, sourceInfo: SourceInfo): Unit =
+    if (tracing) {
+      if (openEvent.value.isDefined)
+        elaborationError(
+          s"$what is inside an event block; call it outside, and the one event on the member it returns carries the pop",
+          sourceInfo
+        )
+      declarations.pops += new PendingPop(handle, info, what, sourceInfo)
+    }
+
+  /** Runs `body` once with `member` standing for every member of `view`, as the open `iter` block, which may not be
+    * nested in another or in an event. `leaves` is the collection the member leaves, for the block of a `clear`,
+    * `rollback`, or `dropYoungest`. Returns the block, which has counted the events it declared.
+    */
+  private def runIter[T <: ObjectType](what: String, view: ViewExpr, member: T, leaves: Option[CollectionInfo],
+    sourceInfo: SourceInfo)(body: T => Unit): OpenIter = {
+    if (openIter.value.isDefined) elaborationError(s"$what is nested inside another iter block, which is not supported", sourceInfo)
     if (openEvent.value.isDefined)
-      elaborationError("iter is inside an event block; put the events inside the iter block instead", sourceInfo)
+      elaborationError(s"$what is inside an event block; put the events inside the $what block instead", sourceInfo)
+    val iter = new OpenIter(member, leaves)
     member.binding = Binding.IterMember(view, open = true)
-    try openIter.withValue(Some(member))(body(member))
+    try openIter.withValue(Some(iter))(body(member))
     finally member.binding = Binding.IterMember(view, open = false)
+    iter
   }
 
   /** Gates the sites declared in `body` on a test of a view's size, which the runtime evaluates against the state
@@ -281,14 +385,20 @@ object EventTrace {
     ManifestGen.json(EventSchema.fromSites(sites), sites, latest.toSeq.flatMap(_.objectTypes.values))
   }
 
-  /** Every site of an elaboration, each event-local field left `Absent` taking its type from the other sites. */
-  private def resolvedSites(d: Declarations): Seq[SiteLayout] =
+  /** Every site of an elaboration, each event-local field left `Absent` taking its type from the other sites. A pop
+    * whose member never got an event is an error here, since an event on it may follow anywhere in elaboration.
+    */
+  private def resolvedSites(d: Declarations): Seq[SiteLayout] = {
+    d.pops.find(_.carrier.isEmpty).foreach { p =>
+      elaborationError(s"${p.what}'s member has no event, which would carry the pop; declare one event on it", p.sourceInfo)
+    }
     EventSchema.resolve(d.siteLayouts.toSeq) match {
       case Right(typed)   => typed
       case Left(untyped) => throw new IllegalArgumentException(untyped.mkString("; "))
     }
+  }
 
-  /** The runtime and DPI adapter, shipped in the frontend's resources. */
+  /** The runtime and DPI adapter, shipped in the frontend's resources, which link to `runtime/src`. */
   private val RuntimeSources = Seq("eventtrace_runtime.h", "eventtrace_runtime.cc", "eventtrace_tracker.h", "eventtrace_dpi.cc")
 
   /** Makes the elaboration's first sink carry everything the simulator compiles besides the RTL: the runtime sources
@@ -309,12 +419,25 @@ object EventTrace {
     }
   }
 
+  /** What annotations import, as `import eventtrace.EventTrace.syntax._`: `"name" := value` and `Absent`. */
   object syntax {
+
+    /** A string as the name of an event-local field, so that `"name" := value` captures `value` under it. */
     implicit class CaptureName(private val name: String) extends AnyVal {
+
+      /** Captures a `Bool`, `UInt`, or `SInt` value. */
       def :=(value: Bits)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
+
+      /** Captures a `ChiselEnum` value; consumers see its variant names. */
       def :=[T <: EnumType](value: T)(implicit ev: EnumOf[T], sourceInfo: SourceInfo): Unit = capture(name, value)
+
+      /** Captures an object's ID. */
       def :=(value: IdRef)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
+
+      /** Captures the ID of the object `value` resolves to. */
       def :=(value: ObjectType)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
+
+      /** Declares the field without a value at this site, so that its records leave it out. */
       def :=(value: Absent.type)(implicit sourceInfo: SourceInfo): Unit = capture(name, value)
     }
 
@@ -330,8 +453,8 @@ object EventTrace {
     body: => Unit
   ): Unit = {
     if (openEvent.value.isDefined) elaborationError(s"$what is nested inside another event", sourceInfo)
-    openIter.value.foreach { member =>
-      if (!subject.exists(_ eq member))
+    openIter.value.foreach { iter =>
+      if (!subject.exists(_ eq iter.member))
         elaborationError(s"$what is inside an iter block, which may hold only events on its member", sourceInfo)
     }
     val guards = openGuards.value
@@ -343,6 +466,23 @@ object EventTrace {
     val enable = computingEnable.withValue(true)(when.cond)
     val module = Module.currentModule.getOrElse(elaborationError(s"$what is outside a module", sourceInfo))
     val open = OpenEvent(name, subject, created, module, WhenDepth(), mutable.ArrayBuffer.empty, mutable.ArrayBuffer.empty)
+    // The event in the block of a rollback, clear, or dropYoungest carries its member's removal from that queue.
+    openIter.value.foreach { iter =>
+      iter.leaves.foreach(info => open.effects += Effect.Drop(info))
+      iter.events += 1
+    }
+    // The one event on a member that pop returned carries its removal from the head.
+    subject.flatMap(s => declarations.pops.find(_.handle eq s)).foreach { p =>
+      p.carrier.foreach { first =>
+        elaborationError(
+          s"$what is a second event on the member ${p.what} returns; the first, at $first, carries the pop, and a " +
+            "popped member takes exactly one event",
+          sourceInfo
+        )
+      }
+      p.carrier = Some(location(sourceInfo))
+      open.effects += Effect.Pop(p.info)
+    }
     openEvent.withValue(Some(open))(body)
     val entries = open.entries
     val lifecycle =
@@ -366,7 +506,11 @@ object EventTrace {
     val resolved = Option.when(subject.isDefined || refs.nonEmpty || guards.nonEmpty)(
       handles(what, open, subject.toSeq ++ refs ++ tested.flatMap(Queries.handles), tested, sourceInfo)
     )
-    val queryValues = resolved.toSeq.flatMap(_._2)
+    // A ROB's or map's key travels in the payload too, after the values its queries compare with.
+    val keys = open.effects.toSeq.collect { case Effect.Add(_, Some(h: Operand.Hardware)) => h }
+    val queryValues = resolved.toSeq.flatMap(_._2).foldLeft(Seq.empty[Operand.Hardware]) { (vs, v) =>
+      if (vs.exists(_ eq v)) vs else vs :+ v
+    } ++ keys
     val packed = entries.collect { case Entry(field, Hardware(value), Some(t), _, _) => (field, value, t.width) }
     val offsets = packed.map(_._1).zip(packed.scanLeft(0)(_ + _._3)).toMap
     val operandOffsets = queryValues.zip(queryValues.scanLeft(packed.map(_._3).sum)(_ + _.tpe.width))
@@ -416,6 +560,7 @@ object EventTrace {
   private def handles(what: String, open: OpenEvent, roots: Seq[ObjectType], tested: Seq[ViewExpr], sourceInfo: SourceInfo)
     : (Seq[HandlePlan], Seq[Operand.Hardware]) = {
     val seen = mutable.LinkedHashMap.empty[Long, ObjectType]
+    /** Adds `handle`, once, after checking it, then every handle its query refers to. */
     def visit(handle: ObjectType): Unit = if (!seen.contains(handle.serial)) {
       seen(handle.serial) = handle
       checkHandle(what, handle, sourceInfo)
@@ -424,7 +569,13 @@ object EventTrace {
     roots.foreach(visit)
     val ordered = seen.values.toSeq.sortBy(_.serial)
     val values = mutable.ArrayBuffer.empty[Operand.Hardware]
-    (ordered.flatMap(viewOf) ++ tested).flatMap(Queries.hardware).foreach { v => if (!values.exists(_ eq v)) values += v }
+    val chosenBy = ordered.flatMap(h => h.binding match {
+      case Binding.Chosen(_, chooser, _) => Queries.hardware(chooser)
+      case _                             => Nil
+    })
+    ((ordered.flatMap(viewOf) ++ tested).flatMap(Queries.hardware) ++ chosenBy).foreach { v =>
+      if (!values.exists(_ eq v)) values += v
+    }
     values.foreach { v =>
       if (!(v.module eq open.module))
         elaborationError(
@@ -436,6 +587,7 @@ object EventTrace {
     (ordered.map(h => HandlePlan(h, h.binding)), values.toSeq)
   }
 
+  /** The view a chosen handle or an `iter` member comes from; none for any other handle. */
   private def viewOf(handle: ObjectType): Option[ViewExpr] = handle.binding match {
     case Binding.Chosen(view, _, _)   => Some(view)
     case Binding.IterMember(view, _) => Some(view)
@@ -474,6 +626,9 @@ object EventTrace {
     open.entries += entry(what)
   }
 
+  /** The entry capturing `v` as the event-local field `name`, typed from `v`, with `enumObject` for an enum value. A
+    * literal is supplied by the decoder; any other value travels in the payload.
+    */
   private def dataEntry(what: String, name: String, v: Data, enumObject: Option[ChiselEnum], sourceInfo: SourceInfo): Entry = {
     val tpe = FieldType(knownWidth(what, v, sourceInfo), v.isInstanceOf[SInt], v.isInstanceOf[Bool],
       enumObject.map(registerEnum(_, sourceInfo)))
@@ -583,10 +738,12 @@ object EventTrace {
     */
   private def extend(what: String, t: FieldType, value: Data, sourceInfo: SourceInfo): Data = {
     val width = knownWidth(what, value, sourceInfo)
+    /** Stops elaboration: the value is wider than the field. */
     def truncation = elaborationError(
       s"$what assigns a $width-bit value to a ${t.typeName} field; truncate it explicitly, as in x(${t.width - 1}, 0)",
       sourceInfo
     )
+    /** Stops elaboration: the value is a `kind`, which the field's type does not admit. */
     def mixing(kind: String) = elaborationError(s"$what assigns a $kind value to a ${t.typeName} field", sourceInfo)
     if (t.enumDef.isDefined) value
     else if (t.isBool) value match {
@@ -654,6 +811,7 @@ object EventTrace {
       )
   }
 
+  /** `value`'s width, which must be known and at most [[MaxFieldBits]]. */
   private def knownWidth(what: String, value: Data, sourceInfo: SourceInfo): Int = {
     val width = value.widthOption.getOrElse(
       elaborationError(s"$what has an unknown width; slice or pad it to a known width", sourceInfo)
@@ -667,6 +825,7 @@ object EventTrace {
     width
   }
 
+  /** An event's name becomes a C++ struct, so it must be a C++ identifier and not a keyword. */
   private def checkEventName(what: String, name: String, sourceInfo: SourceInfo): Unit =
     CppGen.identifierError(name).foreach(reason => elaborationError(s"$what: $reason", sourceInfo))
 
@@ -743,6 +902,7 @@ object EventTrace {
     sourceInfo: SourceInfo
   ): Unit =
     siteLayouts.filter(_.name == name).foreach { other =>
+      /** Fields as `name: type`, sorted, as the error shows them. */
       def signature(fs: Seq[FieldLayout]) = fs.map(f => s"${f.name}: ${f.typeName}").sorted.mkString("[", ", ", "]")
       val conflicting = fields.map(_.name).toSet != other.fields.map(_.name).toSet || fields.exists { f =>
         other.fields.find(_.name == f.name).exists(o => f.tpe.isDefined && o.tpe.isDefined && f.tpe != o.tpe)
@@ -753,6 +913,7 @@ object EventTrace {
             s"${signature(other.fields)}; sites sharing an event name must declare exactly the same fields",
           sourceInfo
         )
+      /** A field's role as the error shows it. */
       def role(f: FieldLayout) = f.role.map(_.written).getOrElse("no role")
       fields.foreach { f =>
         other.fields.find(_.name == f.name).foreach { o =>
@@ -778,11 +939,13 @@ object EventTrace {
         )
     }
 
+  /** A source location as diagnostics and the manifest show it, `file:line`. */
   private[eventtrace] def location(sourceInfo: SourceInfo): String = sourceInfo match {
     case SourceLine(file, line, _) => s"$file:$line"
     case _                         => "unknown location"
   }
 
+  /** Stops elaboration with `message`, followed by the source location. */
   private[eventtrace] def elaborationError(message: String, sourceInfo: SourceInfo): Nothing =
     throw new IllegalArgumentException(s"$message (${location(sourceInfo)})")
 }

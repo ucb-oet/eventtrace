@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+/// The command line: one subcommand and its arguments.
 #[derive(Parser)]
 #[command(name = "eventtrace", about = "Reads EventTrace traces")]
 struct Cli {
@@ -19,6 +20,7 @@ struct Cli {
     command: Command,
 }
 
+/// The subcommands, each with its module's arguments.
 #[derive(Subcommand)]
 enum Command {
     /// Prints a trace as text, one line per event, with absent fields left out.
@@ -31,6 +33,7 @@ enum Command {
     Waterfall(waterfall::Args),
 }
 
+/// Runs the subcommand; on an error, prints it to standard error and exits with failure.
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::Dump(args) => dump::run(args),

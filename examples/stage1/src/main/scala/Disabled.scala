@@ -1,3 +1,4 @@
+/* Stage 1 with tracing left off: elaborating the fixture without EventTrace.enable must leave no trace in it. */
 package eventtrace.examples.stage1
 
 import circt.stage.ChiselStage

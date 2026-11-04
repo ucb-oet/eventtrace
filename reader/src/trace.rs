@@ -48,6 +48,7 @@ impl Value {
 }
 
 impl std::fmt::Display for Value {
+    /// Writes the value as a decimal number.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Unsigned(v) => write!(f, "{v}"),
@@ -131,6 +132,7 @@ impl<'m, R: Read> Events<'m, R> {
 
     /// The next Record, or None at the end of the stream.
     fn record(&mut self) -> Result<Option<proto::Record>> {
+        // The error for a failed read: the stream ending inside `what`, or the read itself failing.
         let truncated = |e: std::io::Error, what: &str| {
             if e.kind() == ErrorKind::UnexpectedEof {
                 Error(format!("{} ends inside {what}", self.name))
@@ -166,6 +168,8 @@ impl<'m, R: Read> Events<'m, R> {
             .map_err(|e| Error(format!("{} has a malformed record: {e}", self.name)))
     }
 
+    /// Decodes `raw`, an event of the current cycle, by its site's schema, and numbers it. Fails for a site the
+    /// manifest does not list, or for values that do not match the fields present.
     fn decode(&mut self, raw: proto::Event) -> Result<Event> {
         let event = self.manifest.site_event(raw.site_id).ok_or_else(|| {
             Error(format!("{}: cycle {} has an event from site {}, which the manifest does not list", self.name, self.cycle, raw.site_id))
@@ -207,6 +211,7 @@ impl<'m, R: Read> Events<'m, R> {
 impl<R: Read> Iterator for Events<'_, R> {
     type Item = Result<Event>;
 
+    /// The next event, reading Cycle records as needed and skipping records of other kinds; None at the end.
     fn next(&mut self) -> Option<Result<Event>> {
         loop {
             if let Some(raw) = self.pending.next() {

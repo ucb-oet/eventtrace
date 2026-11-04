@@ -1,3 +1,5 @@
+<!-- The Python SDK's package page: what it records, how to install it, and where its API is documented. -->
+
 # EventTrace Python SDK
 
 Record events from Python models using EventTrace's raw protobuf format and

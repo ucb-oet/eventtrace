@@ -1,3 +1,5 @@
+/* Sites for the runtime checks of collections, queries, and fields, which violations.cc drives with synthetic
+ * records. */
 package eventtrace.examples.collections
 
 import chisel3._
@@ -7,6 +9,7 @@ import eventtrace.EventTrace.syntax._
 
 import java.nio.file.{Files, Paths}
 
+/** The object the fixture's collections hold, with a field of each property: const, setOnce, and mutable. */
 class Cell extends EventTrace.ObjectType("cell") {
   val key   = const(UInt(4.W))
   val once  = setOnce(UInt(4.W))
@@ -53,6 +56,10 @@ class Misuse extends Module {
   when (fire(21)) { EventTrace.create(new Note, event = "jot") { n => n.v := 1.U; "self" := n } }
 }
 
+/** Elaborates [[Misuse]] with tracing on into the directory given as the first argument, `build/misuse` by default,
+  * and writes the manifest there. violations.cc compiles the generated handlers and reads its traces back with the
+  * manifest.
+  */
 object MisuseMain extends App {
   EventTrace.enable()
   val targetDir = args.headOption.getOrElse("build/misuse")

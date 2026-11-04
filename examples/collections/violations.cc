@@ -24,6 +24,8 @@ unsigned site(const std::string& name) {
   std::exit(2);
 }
 
+// A sequence of synthetic records and how its run must end: stopped with a violation containing `violation`, or, if
+// that is null, finished normally with a trace containing `records`.
 struct Scenario {
   const char* label;
   std::vector<std::vector<std::string>> cycles;  // the events firing in cycles 0, 1, ...
@@ -35,6 +37,7 @@ struct Scenario {
 // manifest, and a directory for the scenarios' traces.
 std::string dump, manifest, trace_dir;
 
+// Everything readable from `fd`, which it then closes.
 std::string drain(int fd) {
   std::string s;
   char buffer[4096];
@@ -55,10 +58,13 @@ std::string text_of(const std::string& path) {
   return text;
 }
 
+// Runs scenario `s` in a child process, writing its trace as violation<index>.trace in the trace directory, and
+// prints and returns whether it ended as expected.
 bool run(const Scenario& s, std::size_t index) {
   const std::string trace = trace_dir + "/violation" + std::to_string(index) + ".trace";
   int err[2];
   if (pipe(err) != 0) std::abort();
+  std::fflush(stdout);  // a child would otherwise print what is still buffered again
   const pid_t pid = fork();
   if (pid == 0) {
     dup2(err[1], 2);
@@ -87,6 +93,8 @@ bool run(const Scenario& s, std::size_t index) {
 
 }  // namespace
 
+// Takes the dump command, the fixture's manifest, and the trace directory; checks that no site has a payload, then
+// runs every scenario and fails if any did not end as expected.
 int main(int argc, char** argv) {
   if (argc != 4) {
     std::fprintf(stderr, "usage: %s <dump command> <manifest> <trace directory>\n", argv[0]);

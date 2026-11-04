@@ -1,14 +1,14 @@
+/* EventTrace's uses of Chisel internals, which code inside the `chisel3` package may read from Chisel's private
+ * `Builder`. If a Chisel release moves either, only this file changes. */
 package chisel3.internal.eventtrace
-
-/** EventTrace's uses of Chisel internals, which code inside the `chisel3` package may read from Chisel's private
-  * `Builder`. If a Chisel release moves either, only this file changes.
-  */
 
 /** Chisel tracks the enclosing `when` scopes only in its `Builder`. EventTrace compares this depth when an event opens
   * and at each capture, to reject captures under a `when` nested inside the event, and the edge helpers compare it to
   * reject being built inside a `when`.
   */
 object WhenDepth {
+
+  /** The number of `when` scopes enclosing the point being elaborated: 0 outside any. */
   def apply(): Int = chisel3.internal.Builder.whenDepth
 }
 
@@ -16,5 +16,7 @@ object WhenDepth {
   * elaboration, since one program may elaborate several designs.
   */
 object Elaboration {
+
+  /** The token of the elaboration in progress: the same object throughout it, and a different one in the next. */
   def current(): AnyRef = chisel3.internal.Builder.captureContext()
 }

@@ -1,3 +1,6 @@
+<!-- The contract for the trace and the manifest, for writing your own tools: the manifest's fields, the trace's
+     records, what a trace means, and the optional metadata of native manifests. -->
+
 # Trace and manifest formats
 
 A trace is meaningful only with its design's manifest. The trace format, `proto/eventtrace.proto`, is the same for
@@ -43,7 +46,8 @@ The manifest is a JSON object with four lists.
 ```
 
 `sites`: one line per site, mapping the site ID that every event carries to its event name, its module's instance
-path, and its source location. A site whose records find their subject blocked has `"blocks": true`:
+path, and its source location. `instance` and `source` are optional: a producer whose sites have no single place in
+the design leaves them out. A site whose records find their subject blocked has `"blocks": true`:
 
 ```json
 {"site_id": 0, "event_name": "fetch.lookup", "instance": "TestHarness.chiptop0.system.tile_prci_domain.element_reset_domain.rockettile.frontend", "source": "generators/rocket-chip/src/main/scala/rocket/Frontend.scala:399"}

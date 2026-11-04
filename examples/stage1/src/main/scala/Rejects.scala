@@ -1,3 +1,5 @@
+/* Designs breaking a rule of events, their fields, or edges, each of which must fail to elaborate with its own
+ * error. */
 package eventtrace.examples.stage1
 
 import chisel3._
@@ -49,6 +51,7 @@ object Gear extends ChiselEnum {
 
 /** A different enum that is also named `Mode`. */
 object Shadow {
+  /** Variants A and B; [[SameEnumName]] captures one beside the fixture's own `Mode`. */
   object Mode extends ChiselEnum {
     val A, B = Value
   }

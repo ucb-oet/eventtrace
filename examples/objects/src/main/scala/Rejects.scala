@@ -1,3 +1,5 @@
+/* Designs breaking a rule of objects and their fields, each of which must fail with its own error, during
+ * elaboration or when the generated files are built. */
 package eventtrace.examples.objects
 
 import chisel3._
@@ -5,6 +7,9 @@ import circt.stage.ChiselStage
 import eventtrace.EventTrace
 import eventtrace.EventTrace.syntax._
 
+/** An object type with a field of each property: `key` const, `tag` setOnce, and `state` and `flag` mutable. Each
+  * case gives its own type name.
+  */
 class Item(typeName: String) extends EventTrace.ObjectType(typeName) {
   val key   = const(UInt(4.W))
   val tag   = setOnce(UInt(4.W))
@@ -30,6 +35,7 @@ class Shape(withExtra: Boolean) extends EventTrace.ObjectType("shape") {
   */
 object Rejects extends App {
   EventTrace.enable()
+  /** A case's design: a [[Case]] module running `body`, built anew each time the case elaborates it. */
   private def design(body: (UInt, SInt) => Unit): () => RawModule = () => new Case(body)
 
   val cases = Seq[(String, () => RawModule, String)](

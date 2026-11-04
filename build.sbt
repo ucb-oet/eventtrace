@@ -31,3 +31,7 @@ lazy val objects = (project in file("examples/objects"))
 lazy val collections = (project in file("examples/collections"))
   .dependsOn(frontend)
   .settings(chiselSettings)
+
+lazy val structures = (project in file("examples/structures"))
+  .dependsOn(frontend)
+  .settings(chiselSettings)

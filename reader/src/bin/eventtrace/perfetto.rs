@@ -39,13 +39,14 @@ use pb::track_event::Type;
 
 const SEQUENCE: u32 = 1;
 
-/// Writes Perfetto TracePackets: track descriptors, then slices and marks in time order.
+/// Writes Perfetto TracePackets: each track's descriptor before its first event, and slices and marks in time order.
 struct Writer<W: Write> {
     out: W,
     next_uuid: u64,
 }
 
 impl<W: Write> Writer<W> {
+    /// Writes `packet` on the trace's one packet sequence.
     fn packet(&mut self, mut packet: pb::TracePacket) -> Result<()> {
         packet.trusted_packet_sequence_id = Some(SEQUENCE);
         // A Perfetto trace is one Trace message, whose packets are a repeated field, so Trace messages of one packet
@@ -53,6 +54,8 @@ impl<W: Write> Writer<W> {
         self.out.write_all(&pb::Trace { packet: vec![packet] }.encode_to_vec()).map_err(output::error)
     }
 
+    /// Declares a track named `name`, under `parent` if given and ranked among its siblings by `rank`, and returns its
+    /// UUID. With `explicit_children`, the track orders its children by their ranks.
     fn track(&mut self, name: String, parent: Option<u64>, rank: Option<i32>, explicit_children: bool) -> Result<u64> {
         let uuid = self.next_uuid;
         self.next_uuid += 1;
@@ -68,6 +71,7 @@ impl<W: Write> Writer<W> {
         Ok(uuid)
     }
 
+    /// Declares a counter track named `name` under `parent`, and returns its UUID.
     fn counter_track(&mut self, name: String, parent: u64) -> Result<u64> {
         let uuid = self.next_uuid;
         self.next_uuid += 1;
@@ -79,6 +83,7 @@ impl<W: Write> Writer<W> {
         Ok(uuid)
     }
 
+    /// Sets the counter track `track` to `value` at `cycle`; an unsigned value above i64's range goes as a double.
     fn counter(&mut self, cycle: u64, track: u64, value: Value) -> Result<()> {
         let mut event = pb::TrackEvent {
             r#type: Some(Type::Counter as i32), track_uuid: Some(track), ..Default::default()
@@ -91,6 +96,8 @@ impl<W: Write> Writer<W> {
         self.packet(pb::TracePacket { timestamp: Some(cycle), track_event: Some(event), ..Default::default() })
     }
 
+    /// Writes a track event of `kind` at `cycle` on `track`, with `args` as its annotations, beginning the arrows
+    /// `flows` and ending the arrows `terminating`.
     #[allow(clippy::too_many_arguments)]
     fn event(
         &mut self,
@@ -142,6 +149,7 @@ impl Resources {
         Ok((lane, self.uuids[&(value, lane)]))
     }
 
+    /// Frees `lane` of `value`'s track for another object.
     fn release(&mut self, value: Value, lane: usize) {
         self.lanes.get_mut(&value).unwrap()[lane] = false;
     }
@@ -159,6 +167,7 @@ fn fields(manifest: &Manifest, event: &Event) -> Vec<(String, String)> {
     event.present_fields(manifest).map(|(f, v)| (f.name.clone(), text::value(manifest, f, v).to_string())).collect()
 }
 
+/// The arguments of `eventtrace perfetto`: the view, the manifest, the trace, and the file to write.
 #[derive(clap::Args)]
 pub struct Args {
     /// The design's view, such as reader/sodor/view.json
@@ -171,6 +180,7 @@ pub struct Args {
     output: PathBuf,
 }
 
+/// Converts the trace at `args.trace` by the view, writing the Perfetto trace to `args.output`.
 pub fn run(args: Args) -> Result<()> {
     let manifest = Manifest::load(&args.manifest)?;
     let views = view::load(&args.view, &manifest)?;
@@ -219,6 +229,7 @@ fn begin<'a, W: Write>(
             }
         }
     }
+    // The text of a field the create event set, or of the instruction as "asm", by name.
     let known = |name: &str| created.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
     let named: Vec<String> = d.view.label.fields().iter().filter_map(|&name| known(name)).collect();
     let mut label = if named.is_empty() { format!("{object}#{id}") } else { named.join(" ") };
@@ -230,6 +241,8 @@ fn begin<'a, W: Write>(
     writer.event(at, Type::SliceBegin, track, Some(label), args, vec![], flows)
 }
 
+/// Converts `events` into a Perfetto trace on `out`, as the module describes, with a track under Counters for each
+/// counter's scope and keys.
 fn convert<W: Write>(
     views: &[View],
     manifest: &Manifest,
@@ -243,6 +256,7 @@ fn convert<W: Write>(
     let mut arrows: HashMap<usize, Vec<(&str, &str)>> = HashMap::new();
     for view in views {
         let object = view.object.as_str();
+        // Whether an event's subject is the view's object type.
         let of_object = |e: &&EventSchema| e.subject.as_deref() == Some(object);
         let track_field = manifest
             .events
@@ -326,7 +340,7 @@ fn convert<W: Write>(
                     e.get(manifest, key).map(|v| text::value(manifest, field, v).to_string())
                         .ok_or_else(|| Error(format!("counter {} has an absent key {key}", counter.event)))
                 }).collect::<Result<Vec<_>>>()?;
-                let scope = manifest.sites.iter().find(|s| s.site_id == e.site_id).map(|s| s.instance.as_str()).unwrap_or("");
+                let scope = manifest.sites.iter().find(|s| s.site_id == e.site_id).and_then(|s| s.instance.as_deref()).unwrap_or("");
                 let key = (e.event, scope.to_string(), keys.clone());
                 let track = match counter_tracks.get(&key) {
                     Some(&track) => track,
