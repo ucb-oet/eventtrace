@@ -46,11 +46,14 @@ auto type_name(const T&) -> decltype(T::kTypeName) {
 template <class T>
 class Store {
  public:
+  // Adds an object with ID `id` and returns it, for its create event to assign its fields.
   T& create(unsigned long long id) {
     T& o = objects_[id];
     o.id = id;
     return o;
   }
+
+  // Removes the object with ID `id`; references to it are no longer valid.
   void erase(unsigned long long id) { objects_.erase(id); }
 
  private:
@@ -62,9 +65,15 @@ class Effects;
 // What applying a cycle's membership changes needs from a collection of any kind.
 class CollectionBase {
  public:
+  // `index` is the collection's position among the design's collections, which its members record in member_of;
+  // `name` names it in messages.
   CollectionBase(unsigned index, const char* name) : index_(index), name_(name) {}
   virtual ~CollectionBase() = default;
+
+  // The collection's position among the design's collections.
   unsigned index() const { return index_; }
+
+  // The collection's name, for messages.
   const char* name() const { return name_; }
 
   // Applies the cycle's staged removals, then its additions, which join in the order they were staged, and checks
@@ -85,11 +94,13 @@ class CollectionBase {
 template <class T>
 class Collection final : public CollectionBase {
  public:
+  // Registers the set with `effects`, which applies its staged changes at the end of each cycle.
   Collection(Effects& effects, unsigned index, const char* name);
 
   // The members before the clock edge, in join order.
   const std::vector<T*>& members() const { return members_; }
 
+  // Removes the cycle's leavers, then appends its joiners in the order they were staged. A set requires nothing more.
   void apply(Runtime&) override {
     for (T* o : removes_) {
       members_.erase(std::find(members_.begin(), members_.end(), o));
@@ -121,6 +132,7 @@ struct Staged {
 template <class T>
 class Queue : public CollectionBase {
  public:
+  // Registers the queue with `effects`, which applies its staged changes at the end of each cycle.
   Queue(Effects& effects, unsigned index, const char* name, std::size_t entries);
 
   // The members before the clock edge, oldest first.
@@ -134,6 +146,8 @@ class Queue : public CollectionBase {
     return std::vector<T*>(members_.end() - static_cast<std::ptrdiff_t>(k), members_.end());
   }
 
+  // Removes the cycle's leavers, as leave does, appends its joiners at the tail in the order they were staged, and
+  // checks the queue's entries.
   void apply(Runtime& rt) override {
     leave(rt);
     for (const Staged<T>& a : adds_) join(a.object, 0);
@@ -182,6 +196,7 @@ class Queue : public CollectionBase {
     return rewind;
   }
 
+  // Appends o at the tail, with `key`, and records that it joined.
   void join(T* o, uint64_t key) {
     members_.push_back(o);
     keys_.push_back(key);
@@ -195,15 +210,19 @@ class Queue : public CollectionBase {
                    members_.size(), entries_);
   }
 
+  // The position of o among the members, oldest first, or the number of members if it is not one.
   std::size_t position(const T& o) const {
     return static_cast<std::size_t>(std::find(members_.begin(), members_.end(), &o) - members_.begin());
   }
+
+  // The position of the member with `key`, oldest first, or the number of members if none has it.
   std::size_t position_of_key(uint64_t key) const {
     return static_cast<std::size_t>(std::find(keys_.begin(), keys_.end(), key) - keys_.begin());
   }
 
-  // Whether o leaves this cycle, by pop, rollback, or clear.
+  // Whether o leaves this cycle, by pop, rollback, clear, or dropYoungest.
   bool leaving(const T& o) const {
+    // Whether a staged change is to o.
     const auto is = [&](const Staged<T>& s) { return s.object == &o; };
     return std::any_of(pops_.begin(), pops_.end(), is) || std::any_of(drops_.begin(), drops_.end(), is);
   }
@@ -220,6 +239,7 @@ class Queue : public CollectionBase {
 template <class T>
 class Rob final : public Queue<T> {
  public:
+  // Registers the ROB with `effects`, which applies its staged changes at the end of each cycle.
   Rob(Effects& effects, unsigned index, const char* name, std::size_t entries, uint64_t keys)
       : Queue<T>(effects, index, name, entries), keys_count_(keys) {}
 
@@ -257,6 +277,9 @@ class Rob final : public Queue<T> {
                  static_cast<unsigned long long>(tail), static_cast<unsigned long long>(*next_));
   }
 
+  // Removes the cycle's leavers, as leave does, moving the tail back to the oldest that rollback or clear removed;
+  // then appends each joiner, whose key must be below `keys` and the one the tail allocates next; then checks the
+  // ROB's entries.
   void apply(Runtime& rt) override {
     if (const std::optional<uint64_t> rewind = this->leave(rt)) next_ = *rewind;
     for (const Staged<T>& a : this->adds_) {
@@ -285,8 +308,10 @@ class Rob final : public Queue<T> {
 template <class T>
 class Map final : public CollectionBase {
  public:
+  // Registers the map with `effects`, which applies its staged changes at the end of each cycle.
   Map(Effects& effects, unsigned index, const char* name, std::size_t entries);
 
+  // The members before the clock edge, in join order.
   const std::vector<T*>& members() const { return members_; }
 
   // The member under `key`, or null.
@@ -301,6 +326,7 @@ class Map final : public CollectionBase {
     rt.violation(site, "%s has no member with key %llu", name(), static_cast<unsigned long long>(key));
   }
 
+  // Removes the cycle's leavers, then adds each joiner, whose key must be below `entries` and held by no member.
   void apply(Runtime& rt) override {
     for (const Staged<T>& r : removes_) {
       const std::size_t at = static_cast<std::size_t>(std::find(members_.begin(), members_.end(), r.object) -
@@ -329,6 +355,7 @@ class Map final : public CollectionBase {
  private:
   friend class Effects;
 
+  // The position, in join order, of the member under `key`, or the number of members if there is none.
   std::size_t position_of_key(uint64_t key) const {
     return static_cast<std::size_t>(std::find(keys_.begin(), keys_.end(), key) - keys_.begin());
   }
@@ -343,6 +370,7 @@ class Map final : public CollectionBase {
 // the cycle, so that every query in the cycle reads the state before the edge.
 class Effects {
  public:
+  // Registers a collection, whose staged changes apply() applies in registration order.
   void add_collection(CollectionBase* c) { collections_.push_back(c); }
 
  protected:
@@ -360,6 +388,7 @@ class Effects {
     writes_.push_back(std::move(write));
   }
 
+  // o joins set c; it must not be a member before the edge, nor be added twice in one cycle.
   template <class T>
   void add(Runtime& rt, unsigned site, unsigned long long event, Collection<T>& c, T& o) {
     touch(rt, site, event, o);
@@ -369,6 +398,7 @@ class Effects {
     c.adds_.push_back(&o);
   }
 
+  // o leaves set c; it must be a member before the edge, and not be removed twice in one cycle.
   template <class T>
   void remove(Runtime& rt, unsigned site, unsigned long long event, Collection<T>& c, T& o) {
     touch(rt, site, event, o);
@@ -400,6 +430,7 @@ class Effects {
     m.adds_.push_back({&o, site, key});
   }
 
+  // o leaves map m; it must be a member before the edge, and not be removed twice in one cycle.
   template <class T>
   void remove(Runtime& rt, unsigned site, unsigned long long event, Map<T>& m, T& o) {
     touch(rt, site, event, o);
@@ -421,6 +452,7 @@ class Effects {
     stage_leave(rt, site, event, q, o, q.drops_);
   }
 
+  // o is destroyed, leaving `store` at the end of the cycle; no other event of the cycle may have an effect on it.
   template <class T>
   void destroy(Runtime& rt, unsigned site, unsigned long long event, Store<T>& store, T& o) {
     touch(rt, site, event, o);
@@ -448,6 +480,7 @@ class Effects {
   }
 
  private:
+  // A staged destruction: the site that made it, the object and its type name, and how to erase it from its store.
   struct Destroy {
     unsigned site;
     Object* object;
@@ -477,6 +510,8 @@ class Effects {
     o.last_site = site;
   }
 
+  // Stages o joining queue or ROB q with `key`; o must not be a member before the edge, nor be added twice in one
+  // cycle.
   template <class T>
   void stage_join(Runtime& rt, unsigned site, unsigned long long event, Queue<T>& q, T& o, uint64_t key) {
     touch(rt, site, event, o);
@@ -486,6 +521,8 @@ class Effects {
     q.adds_.push_back({&o, site, key});
   }
 
+  // Stages o leaving queue or ROB q onto `staged`, its pops or its drops; o must be a member before the edge, and
+  // not leave twice in one cycle.
   template <class T>
   void stage_leave(Runtime& rt, unsigned site, unsigned long long event, Queue<T>& q, T& o,
                    std::vector<Staged<T>>& staged) {
@@ -500,6 +537,7 @@ class Effects {
     return std::find(o.member_of.begin(), o.member_of.end(), c.index()) != o.member_of.end();
   }
 
+  // The registered collection at position `index`, which must be one.
   CollectionBase* collection(unsigned index) const {
     return *std::find_if(collections_.begin(), collections_.end(), [&](CollectionBase* c) { return c->index() == index; });
   }
@@ -530,41 +568,49 @@ Map<T>::Map(Effects& effects, unsigned index, const char* name, std::size_t entr
 // ordering comparisons are false when either side is unset, and != is true.
 namespace query {
 
+// The value of a field that may be unset, or null while it is.
 template <class T>
 const T* value_of(const std::optional<T>& v) {
   return v ? &*v : nullptr;
 }
+// The value of an operand that is always set: a const field, an ID, a literal, or a hardware value.
 template <class T>
 const T* value_of(const T& v) {
   return &v;
 }
 
+// a == b, false if either is unset.
 template <class A, class B>
 bool eq(const A& a, const B& b) {
   const auto* x = value_of(a);
   const auto* y = value_of(b);
   return x && y && *x == *y;
 }
+// a != b, true if either is unset.
 template <class A, class B>
 bool ne(const A& a, const B& b) {
   return !eq(a, b);
 }
+// a < b, false if either is unset.
 template <class A, class B>
 bool lt(const A& a, const B& b) {
   const auto* x = value_of(a);
   const auto* y = value_of(b);
   return x && y && *x < *y;
 }
+// a <= b, false if either is unset.
 template <class A, class B>
 bool le(const A& a, const B& b) {
   const auto* x = value_of(a);
   const auto* y = value_of(b);
   return x && y && *x <= *y;
 }
+// a > b, false if either is unset.
 template <class A, class B>
 bool gt(const A& a, const B& b) {
   return lt(b, a);
 }
+// a >= b, false if either is unset.
 template <class A, class B>
 bool ge(const A& a, const B& b) {
   return le(b, a);
@@ -599,21 +645,25 @@ std::string names(const std::vector<T*>& v) {
   return s;
 }
 
+// The view's one member, for only; a violation if it has none or several.
 template <class T>
 T* only(Runtime& rt, unsigned site, const std::vector<T*>& v, const char* view) {
   if (v.size() != 1) rt.violation(site, "only found %zu members of %s%s", v.size(), view, names(v).c_str());
   return v.front();
 }
+// The view's first member, for head; a violation if it is empty.
 template <class T>
 T* head(Runtime& rt, unsigned site, const std::vector<T*>& v, const char* view) {
   if (v.empty()) rt.violation(site, "head found no members of %s", view);
   return v.front();
 }
+// The view's last member, for last; a violation if it is empty.
 template <class T>
 T* last(Runtime& rt, unsigned site, const std::vector<T*>& v, const char* view) {
   if (v.empty()) rt.violation(site, "last found no members of %s", view);
   return v.back();
 }
+// The view's member at position `k`, counting from 0, for at(k); a violation if it has no more than k members.
 template <class T>
 T* at(Runtime& rt, unsigned site, const std::vector<T*>& v, std::size_t k, const char* view) {
   if (k >= v.size()) rt.violation(site, "at(%zu) found only %zu members of %s%s", k, v.size(), view, names(v).c_str());

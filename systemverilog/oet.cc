@@ -17,12 +17,14 @@ namespace detail {
 
 namespace {
 
+// `s` without leading or trailing whitespace.
 std::string trim(const std::string& s) {
   const std::size_t from = s.find_first_not_of(" \t\n\r");
   if (from == std::string::npos) return "";
   return s.substr(from, s.find_last_not_of(" \t\n\r") - from + 1);
 }
 
+// Whether `s` is an identifier: a letter or underscore, then letters, digits, and underscores.
 bool is_identifier(const std::string& s) {
   if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
   return std::all_of(s.begin(), s.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; });
@@ -31,6 +33,7 @@ bool is_identifier(const std::string& s) {
 // Every record already has these, so no field may take their names.
 const std::set<std::string> kReservedFieldNames = {"cycle", "event_id", "site_id", "subject"};
 
+// A kind as the manifest's "type" names it.
 const char* kind_name(Kind k) {
   switch (k) {
     case Kind::Bool: return "Bool";
@@ -42,6 +45,7 @@ const char* kind_name(Kind k) {
   return "?";
 }
 
+// A type as messages write it, such as Bool, UInt<8>, Id<instruction>, or an enum's name.
 std::string type_text(const Type& t) {
   switch (t.kind) {
     case Kind::Bool: return "Bool";
@@ -51,6 +55,7 @@ std::string type_text(const Type& t) {
   }
 }
 
+// A value's bits in decimal, signed for an SInt, for messages.
 std::string value_text(const Encoded& e, const Type& t) {
   return t.kind == Kind::SInt ? std::to_string(static_cast<int64_t>(e.bits)) : std::to_string(e.bits);
 }
@@ -463,12 +468,14 @@ void Library::finalize() {
 }
 
 void Library::check_declarations() const {
+  // Stops the run unless `name`, which `what` describes, is an identifier and not a reserved name.
   const auto field_name = [&](const std::string& what, const std::string& name) {
     if (!is_identifier(name)) fail(what + ": " + quote(name) + " is not an identifier");
     if (kReservedFieldNames.count(name))
       fail(what + " uses a reserved name; every record already has cycle, event_id, site_id, subject");
   };
   std::map<std::string, const EnumDecl*> enums;
+  // Checks the enum that `t` names, if any: its name is an identifier, and no other enum has it.
   const auto enum_of = [&](const Type& t) {
     if (t.kind != Kind::Enum) return;
     const EnumDecl* d = t.enum_decl();
@@ -540,6 +547,7 @@ void Library::check_declarations() const {
 
 std::string Library::build_manifest() const {
   // As ManifestGen writes it: the same layout, so that the two flows' manifests compare line by line.
+  // One field's entry: its name, its type, the type's object or its enum and width, and then `more`.
   const auto field = [](const std::string& name, const Type& t, const std::string& more) {
     std::string detail;
     if (t.kind == Kind::Id) detail = ", \"object\": " + quote(t.object().name);
@@ -549,12 +557,14 @@ std::string Library::build_manifest() const {
     }
     return "        {\"name\": " + quote(name) + ", \"type\": \"" + kind_name(t.kind) + "\"" + detail + more + "}";
   };
+  // `items` as a JSON list, one per line, indented as ManifestGen's are.
   const auto list = [](const std::vector<std::string>& items) {
     if (items.empty()) return std::string("[]");
     std::string s = "[\n";
     for (std::size_t i = 0; i < items.size(); ++i) s += items[i] + (i + 1 < items.size() ? ",\n" : "\n");
     return s + "      ]";
   };
+  // `items`, one per line, separated by commas.
   const auto join = [](const std::vector<std::string>& items) {
     std::string s;
     for (std::size_t i = 0; i < items.size(); ++i) s += items[i] + (i + 1 < items.size() ? ",\n" : "");
@@ -629,4 +639,5 @@ extern "C" void oet_open(const char* path, const char* start, const char* stop) 
   oet::detail::library().open(path, start, stop);
 }
 
+// Finishes the trace, from `OET_SETUP's final block.
 extern "C" void oet_finish() { oet::detail::library().finish(); }

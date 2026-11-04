@@ -1,3 +1,5 @@
+// EventTrace runtime's implementation: the trace's wire encoding, the per-cycle buffering that orders records, and
+// the recording window's triggers.
 #include "eventtrace_runtime.h"
 
 #include <algorithm>
@@ -17,6 +19,7 @@ constexpr unsigned kCycleCycle = 1, kCycleEvents = 2;
 constexpr unsigned kEventSite = 1, kEventSubject = 2, kEventValues = 3, kEventAbsent = 4;
 constexpr unsigned kFormatVersion = 1;
 
+// Appends the tag of field `field` with wire type `wire_type` to `s`.
 // Every field number above is below 16, so each tag is one byte.
 void put_tag(std::string& s, unsigned field, unsigned wire_type) {
   s.push_back(static_cast<char>(field << 3 | wire_type));
@@ -166,6 +169,8 @@ void Runtime::flush() {
   for (const auto& h : handlers_) h.second();
   sites_.commit(*this);
   const std::string record = writer_.take_cycle(cycle_);
+  // Whether t has fired by this cycle: a cycle trigger once its cycle is reached, an event trigger if one of this
+  // cycle's events matched it.
   const auto fires = [this](const Trigger& t) {
     return t.mode == Trigger::Mode::Cycle ? cycle_ >= t.cycle : t.hit;
   };
@@ -197,6 +202,9 @@ Trigger Runtime::parse_trigger(const char* plusarg, const char* spec) const {
   Trigger t;
   t.spec = spec;
   if (t.spec.empty()) return t;
+  // Parses all of `text` into `out` as strtoll or strtoull does with base 0, so 0x is hex and a leading 0 octal; a
+  // signed value is kept as its 64-bit two's complement. False if text is empty, is not wholly a number, or is
+  // negative for an unsigned field.
   const auto number = [&](const std::string& text, bool is_signed, uint64_t& out) {
     if (text.empty() || (!is_signed && text[0] == '-')) return false;
     char* end = nullptr;

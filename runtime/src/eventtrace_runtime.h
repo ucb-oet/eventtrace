@@ -16,11 +16,14 @@ class Runtime;
 
 // What the generated half says about each site's event, by which recording triggers name events, fields, and enum
 // variants.
+//
+// One variant of an enum field: its name, and the value the field holds for it.
 struct EnumVariant {
   const char* name;
   uint64_t value;
 };
 
+// One field of an event: its name, whether it is signed, and its variants if it is an enum.
 struct FieldInfo {
   const char* name;
   bool is_signed;               // ZigZag-encoded in the trace
@@ -28,6 +31,7 @@ struct FieldInfo {
   unsigned variant_count;
 };
 
+// The event a site emits: its name and its fields.
 struct EventInfo {
   const char* name;         // as the manifest names it, such as instruction.decode
   const FieldInfo* fields;  // in the manifest's order, or null if it has none
@@ -39,10 +43,16 @@ struct EventInfo {
 class Sites {
  public:
   virtual ~Sites() = default;
+
+  // The number of sites; site IDs run from 0 below it.
   virtual unsigned site_count() const = 0;
+
+  // The number of 32-bit words in a site's payload, which every record from that site must carry.
   virtual unsigned payload_words(unsigned site) const = 0;
   // A site's event: its name, and its fields in the manifest's order.
   virtual const EventInfo& event(unsigned site) const = 0;
+
+  // The number of object types; each type's index, below it, selects its own count of object IDs.
   virtual unsigned object_type_count() const = 0;
 
   // SHA-256 of the design's manifest, in hex, which the trace's header carries.
@@ -60,6 +70,7 @@ class Sites {
 // cycle n, and `event:<name>[,<field>=<value>...]` at the first event of that name whose listed fields hold those
 // values.
 struct Trigger {
+  // What fires the trigger: nothing, when none was given; reaching `cycle`; or an event matching `sites` and `fields`.
   enum class Mode { None, Cycle, Event };
   Mode mode = Mode::None;
   std::string spec;   // as given, for messages
@@ -77,11 +88,22 @@ struct Trigger {
 // present fields in the manifest's order, and the positions of its absent fields.
 class TraceWriter {
  public:
+  // Starts an event emitted by `site`, with no subject, values, or absent fields yet.
   void begin(unsigned site);
+
+  // Sets the event's subject: the ID of the object it is about.
   void subject(unsigned long long id) { subject_ = id; }
+
+  // Appends the next present field's value as a varint.
   void value(uint64_t v) { put_varint(values_, v); }
+
+  // Appends the next present field's value, ZigZag-encoded, as the trace carries signed fields.
   void value_signed(int64_t v) { value((static_cast<uint64_t>(v) << 1) ^ static_cast<uint64_t>(v >> 63)); }
+
+  // Marks the field at position `field`, in the manifest's order, as absent; positions are below 64.
   void absent(unsigned field) { absent_ |= uint64_t{1} << field; }
+
+  // Finishes the event: adds it to the cycle's events and marks each watched trigger it matches as hit.
   void end();
 
  private:
@@ -93,7 +115,10 @@ class TraceWriter {
   // The Record of a cycle's events, framed, or nothing if the cycle had none; then starts the next cycle.
   std::string take_cycle(long long cycle);
 
+  // Appends `v` to `s` as a protobuf varint: seven bits per byte, least significant first.
   static void put_varint(std::string& s, uint64_t v);
+
+  // Appends field `field` to `s` as a length-delimited field holding `message`.
   static void put_message(std::string& s, unsigned field, const std::string& message);
 
   std::vector<Trigger*> watching_;  // event triggers that each event is matched against
@@ -112,6 +137,7 @@ class TraceWriter {
 // which the C++ library queues and which emits its events itself.
 class Runtime {
  public:
+  // A runtime for the design whose generated half is `sites`, which supplies the site table and handles each record.
   explicit Runtime(Sites& sites);
 
   // Sends records to the file at `path`. Each sink calls it at the start of the simulation with the path given as
@@ -149,6 +175,7 @@ class Runtime {
   // The next ID of an object type: each type counts from 0. Handlers call it for create events.
   unsigned long long create(unsigned object_type) { return next_object_ids_.at(object_type)++; }
 
+  // The name of the event a site emits, for messages.
   const char* site_name(unsigned site) const { return sites_.event(site).name; }
 
   // Stops at a record that breaks a rule of the tracked model, naming its event, site, and cycle. Records of
@@ -159,13 +186,22 @@ class Runtime {
   [[noreturn]] void fail(const char* format, ...) const;
 
  private:
+  // A payload record of the cycle being buffered.
   struct Record {
     unsigned site;
     std::size_t offset;  // of its payload in words_
   };
 
+  // Handles the buffered cycle, if any: its payload records in site-ID order, stopping if a site fired twice, then
+  // its handlers by order, then the commit. Writes the cycle's events while the recording window is open, moves the
+  // window on, and clears the buffers for the next cycle.
   void flush();
+
+  // Parses `spec`, given as +`plusarg`, into a trigger, stopping the run if it is malformed or names an event, field,
+  // or variant the sites lack. An empty spec gives a trigger whose mode is None.
   Trigger parse_trigger(const char* plusarg, const char* spec) const;
+
+  // Points the writer at the event triggers that can still fire, given the window's state.
   void watch();
 
   Sites& sites_;

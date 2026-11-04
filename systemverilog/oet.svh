@@ -55,6 +55,7 @@
 
 // A null statement, so that `if (c) `OET(...)` stays a statement.
 `define OET(call) ;
+// Nothing, so that a module without OET_ENABLE declares no oet_cycle and imports nothing.
 `define OET_SETUP(clk)
 
 `endif

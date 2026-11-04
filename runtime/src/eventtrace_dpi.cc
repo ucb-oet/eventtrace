@@ -37,6 +37,8 @@ extern "C" void eventtrace_emit_w0(long long cycle, int site) {
   runtime.accept(cycle, static_cast<unsigned>(site), nullptr, 0);
 }
 
+// Defines eventtrace_emit_w<words>, the entry point for sinks whose payload is `words` 32-bit words. The generated
+// header's EVENTTRACE_PAYLOAD_WORD_COUNTS applies it to each nonzero word count the design's sinks use.
 #define EVENTTRACE_DEFINE_EMIT(words)                                                                \
   extern "C" void eventtrace_emit_w##words(long long cycle, int site, const svBitVecVal* payload) { \
     runtime.accept(cycle, static_cast<unsigned>(site), payload, words);                             \
