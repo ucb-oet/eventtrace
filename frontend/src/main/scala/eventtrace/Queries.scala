@@ -201,6 +201,7 @@ class View[T <: ObjectType] private[eventtrace] (private[eventtrace] val expr: V
   /** The number of members, for a test in [[EventTrace.test]]: compare it with a constant, as in `view.size === 1`. */
   def size(implicit sourceInfo: SourceInfo): Size = new Size(expr, EventTrace.location(sourceInfo))
 
+  /** A fresh handle for the member `chooser` picks from this view, valid anywhere. */
   private def choose(chooser: Chooser, sourceInfo: SourceInfo): T = {
     val handle = gen()
     handle.binding = Binding.Chosen(expr, chooser, EventTrace.location(sourceInfo))
@@ -213,22 +214,37 @@ class View[T <: ObjectType] private[eventtrace] (private[eventtrace] val expr: V
   * so it stops elaboration instead.
   */
 final class Size private[eventtrace] (private[eventtrace] val view: ViewExpr, location: String) {
+
+  /** Test: the view has exactly `k` members. */
   def ===(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Eq, k, sourceInfo)
+
+  /** Test: the view has other than `k` members. */
   def =/=(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Ne, k, sourceInfo)
+
+  /** Test: the view has fewer than `k` members. */
   def <(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Lt, k, sourceInfo)
+
+  /** Test: the view has at most `k` members. */
   def <=(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Le, k, sourceInfo)
+
+  /** Test: the view has more than `k` members. */
   def >(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Gt, k, sourceInfo)
+
+  /** Test: the view has at least `k` members. */
   def >=(k: Int)(implicit sourceInfo: SourceInfo): Test = test(CompareOp.Ge, k, sourceInfo)
 
+  /** The test comparing the view's size with `k` by `op`; `k` must be at least 0. */
   private def test(op: CompareOp, k: Int, sourceInfo: SourceInfo): Test = {
     if (k < 0) EventTrace.elaborationError(s"compares a view's size with $k; a size is at least 0", sourceInfo)
     new Test(view, op, k)
   }
 
+  /** Stops elaboration: Scala's `==` would compare at elaboration, before the runtime has counted the members. */
   override def equals(that: Any): Boolean = throw new IllegalArgumentException(
     s"a view's size is compared with Scala's ==, which runs at elaboration, when the runtime has not counted the " +
       s"members; compare it with === inside EventTrace.test ($location)"
   )
+  /** The identity hash, overridden with [[equals]], which never returns. */
   override def hashCode: Int = System.identityHashCode(this)
 }
 
@@ -245,20 +261,36 @@ private[eventtrace] final case class Guard(test: Test, holds: Boolean)
 
 /** A field or an object's `id`, which `orderBy` can rank by. Only this library implements it. */
 trait Key {
+
+  /** The field or ID as a query operand. */
   private[eventtrace] def operand: Operand
 }
 
 /** An object's ID: compare it with another object's in a query, or capture it as an event field. */
 final class IdRef private[eventtrace] (private[eventtrace] val handle: ObjectType) extends Key {
+
+  /** The ID of the object the handle resolves to, as a query operand. */
   private[eventtrace] def operand: Operand = Operand.Id(handle)
 
+  /** Predicate: this ID equals `that`. */
   def ===(that: IdRef)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Eq, that)
+
+  /** Predicate: this ID differs from `that`. */
   def =/=(that: IdRef)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ne, that)
+
+  /** Predicate: this ID is less than `that`. */
   def <(that: IdRef)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Lt, that)
+
+  /** Predicate: this ID is at most `that`. */
   def <=(that: IdRef)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Le, that)
+
+  /** Predicate: this ID is greater than `that`. */
   def >(that: IdRef)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Gt, that)
+
+  /** Predicate: this ID is at least `that`. */
   def >=(that: IdRef)(implicit sourceInfo: SourceInfo): Pred = compare(CompareOp.Ge, that)
 
+  /** This ID compared with `that` by `op`; both must be IDs of one object type, since IDs are counted per type. */
   private def compare(op: CompareOp, that: IdRef)(implicit sourceInfo: SourceInfo): Pred = {
     if (that.handle.typeName != handle.typeName)
       EventTrace.elaborationError(
@@ -273,19 +305,36 @@ final class IdRef private[eventtrace] (private[eventtrace] val handle: ObjectTyp
   * `===` and the ordering comparisons are false when either side is unset, and `=/=` is true.
   */
 sealed trait Pred {
+
+  /** Predicate: both this and `that` hold. */
   def &&(that: Pred): Pred = Pred.And(this, that)
+
+  /** Predicate: this or `that` holds. */
   def ||(that: Pred): Pred = Pred.Or(this, that)
+
+  /** Predicate: this does not hold. */
   def unary_! : Pred = Pred.Not(this)
 
   /** A hardware `Bool` as a term, as in `where(p => p.stage =/= Stage.Buffer || rvc)`; it travels in the payload. */
   def &&(that: Bool)(implicit sourceInfo: SourceInfo): Pred = Pred.And(this, Pred.holds(that, sourceInfo))
+
+  /** Predicate: this holds or the hardware `Bool` `that` is true; `that` travels in the payload. */
   def ||(that: Bool)(implicit sourceInfo: SourceInfo): Pred = Pred.Or(this, Pred.holds(that, sourceInfo))
 }
 
+/** The forms of predicate, as generation reads them. */
 private[eventtrace] object Pred {
+
+  /** `left` compared with `right` by `op`. */
   final case class Compare(op: CompareOp, left: Operand, right: Operand) extends Pred
+
+  /** Both `left` and `right` hold. */
   final case class And(left: Pred, right: Pred) extends Pred
+
+  /** `left` or `right` holds. */
   final case class Or(left: Pred, right: Pred) extends Pred
+
+  /** `pred` does not hold. */
   final case class Not(pred: Pred) extends Pred
 
   /** A `Bool` as a predicate: it equals true. */
@@ -298,29 +347,49 @@ private[eventtrace] object Pred {
 /** A comparison as written in diagnostics, and its C++ helper in `eventtrace::query`. */
 private[eventtrace] sealed abstract class CompareOp(val written: String, val helper: String)
 
+/** The six comparisons. */
 private[eventtrace] object CompareOp {
+
+  /** Equal: `==` in diagnostics, `query::eq` in the generated C++. */
   case object Eq extends CompareOp("==", "eq")
+
+  /** Not equal: `!=` in diagnostics, `query::ne` in the generated C++. */
   case object Ne extends CompareOp("!=", "ne")
+
+  /** Less than: `<` in diagnostics, `query::lt` in the generated C++. */
   case object Lt extends CompareOp("<", "lt")
+
+  /** At most: `<=` in diagnostics, `query::le` in the generated C++. */
   case object Le extends CompareOp("<=", "le")
+
+  /** Greater than: `>` in diagnostics, `query::gt` in the generated C++. */
   case object Gt extends CompareOp(">", "gt")
+
+  /** At least: `>=` in diagnostics, `query::ge` in the generated C++. */
   case object Ge extends CompareOp(">=", "ge")
 }
 
 /** A value in a query. */
 private[eventtrace] sealed trait Operand {
+
+  /** The operand's type, which sets its C++ type and, for a hardware value, its width in the payload. */
   def tpe: FieldType
 }
 
+/** The values a query can compare. */
 private[eventtrace] object Operand {
 
   /** A field of the member being tested or of another handle. */
   final case class Field(handle: ObjectType, field: ObjectField) extends Operand {
+
+    /** The field's declared type. */
     def tpe: FieldType = field.tpe
   }
 
   /** The ID of the member being tested or of another handle. */
   final case class Id(handle: ObjectType) extends Operand {
+
+    /** A 64-bit ID of the handle's object type. */
     def tpe: FieldType = FieldType.id(handle.typeName)
   }
 
@@ -337,15 +406,28 @@ private[eventtrace] object Operand {
   * member being tested.
   */
 private[eventtrace] sealed trait ViewExpr {
+
+  /** The collection whose members the view draws from. */
   def collection: CollectionInfo
 }
 
+/** The steps a view is built from. */
 private[eventtrace] object ViewExpr {
+
+  /** Every member of `collection`, in join order. */
   final case class Source(collection: CollectionInfo) extends ViewExpr
+
+  /** The members of `input` for which `pred`, written over `member`, holds, in `input`'s order. */
   final case class Where(input: ViewExpr, member: ObjectType, pred: Pred) extends ViewExpr {
+
+    /** The input's collection. */
     def collection: CollectionInfo = input.collection
   }
+
+  /** The members of `input` ranked by `key`, written over `member`, ascending; ties keep `input`'s order. */
   final case class OrderBy(input: ViewExpr, member: ObjectType, key: Operand) extends ViewExpr {
+
+    /** The input's collection. */
     def collection: CollectionInfo = input.collection
   }
 
@@ -359,10 +441,19 @@ private[eventtrace] object ViewExpr {
 /** How a handle picks one member of a view. */
 private[eventtrace] sealed trait Chooser
 
+/** The ways to pick a member. */
 private[eventtrace] object Chooser {
+
+  /** The first member, as [[View.head]] picks it. */
   case object Head extends Chooser
+
+  /** The last member, as [[View.last]] picks it. */
   case object Last extends Chooser
+
+  /** Member `k`, counting from 0, as [[View.at]] picks it. */
   final case class At(k: Int) extends Chooser
+
+  /** The one member, as [[View.only]] picks it. */
   case object Only extends Chooser
 
   /** The member of a ROB or map with key `key`, from the collection itself. */
@@ -372,7 +463,10 @@ private[eventtrace] object Chooser {
 /** What kind of collection a declaration made, with the sizes its checks use. */
 private[eventtrace] sealed trait CollectionKind
 
+/** The four kinds of collection. */
 private[eventtrace] object CollectionKind {
+
+  /** Members that join and leave in any order, with no capacity; declared with [[EventTrace.collection]]. */
   case object Set extends CollectionKind
 
   /** A FIFO; `entries` of 0 sets no capacity. */
@@ -402,6 +496,7 @@ private[eventtrace] final class CollectionInfo(
 /** A state change made by an event, applied when the cycle's records have all been handled. */
 private[eventtrace] sealed trait Effect
 
+/** The effects an event can have on its subject. */
 private[eventtrace] object Effect {
 
   /** The subject joins `collection`, under `key` for a ROB or a map. */
@@ -416,12 +511,14 @@ private[eventtrace] object Effect {
   /** The subject leaves a queue or a ROB through the rollback, clear, or dropYoungest whose block holds the event. */
   final case class Drop(collection: CollectionInfo) extends Effect
 
+  /** The subject's life ends, by `complete` or `abort`. */
   case object Destroy extends Effect
 }
 
 /** What produced a handle, which decides where it may be used. */
 private[eventtrace] sealed trait Binding
 
+/** The ways a handle can be produced. */
 private[eventtrace] object Binding {
 
   /** Constructed, but produced by no create block or query. */
@@ -440,23 +537,29 @@ private[eventtrace] object Binding {
   final case class IterMember(view: ViewExpr, open: Boolean) extends Binding
 }
 
+/** Building and inspecting queries: member handles, the checks on predicates and keys, and walks over views. */
 private[eventtrace] object Queries {
+
+  /** Binds `handle` as the open member of a `where` or `orderBy`, and returns it. */
   def member[T <: ObjectType](handle: T): T = {
     handle.binding = Binding.Member(open = true)
     handle
   }
 
+  /** Closes a member handle once its predicate or key is built, so that a later use of it is an error. */
   def close(handle: ObjectType): Unit = handle.binding = Binding.Member(open = false)
 
   /** A predicate may refer to its own member and to handles that can be resolved before it: not to a create
     * handle, whose object does not exist before the edge, nor to the member of another query.
     */
   def checkPred(pred: Pred, member: ObjectType, sourceInfo: SourceInfo): Unit = {
+    /** Checks the handle a field or ID operand refers to; other operands refer to none. */
     def check(o: Operand): Unit = o match {
       case Operand.Field(h, _) => checkHandle(h)
       case Operand.Id(h)       => checkHandle(h)
       case _                   =>
     }
+    /** Rejects a handle, other than `member`, that cannot be resolved before the predicate runs. */
     def checkHandle(h: ObjectType): Unit = if (!(h eq member)) h.binding match {
       case _: Binding.Chosen | Binding.IterMember(_, true) =>
       case Binding.Member(_) =>
@@ -471,6 +574,7 @@ private[eventtrace] object Queries {
       case Binding.Unbound =>
         EventTrace.elaborationError("a where refers to an object that no create block or query produced", sourceInfo)
     }
+    /** Checks every operand of `p`. */
     def walk(p: Pred): Unit = p match {
       case Pred.Compare(_, l, r) => check(l); check(r)
       case Pred.And(l, r)        => walk(l); walk(r)
@@ -552,6 +656,7 @@ private[eventtrace] object Queries {
     case _                                => Nil
   }
 
+  /** Every operand of `p`, left to right. */
   private def predOperands(p: Pred): Seq[Operand] = p match {
     case Pred.Compare(_, l, r) => Seq(l, r)
     case Pred.And(l, r)        => predOperands(l) ++ predOperands(r)
@@ -559,6 +664,7 @@ private[eventtrace] object Queries {
     case Pred.Not(q)           => predOperands(q)
   }
 
+  /** Every handle a field or ID operand of `p` refers to. */
   private def predHandles(p: Pred): Seq[ObjectType] = predOperands(p).collect {
     case Operand.Field(h, _) => h
     case Operand.Id(h)       => h

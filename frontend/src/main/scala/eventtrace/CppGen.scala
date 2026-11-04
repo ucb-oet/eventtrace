@@ -33,6 +33,9 @@ private[eventtrace] object CppGen {
     else if (CppKeywords(name)) Some("names must not be C++ keywords")
     else None
 
+  /** The generated header, [[FileName]], for one elaboration's sites with every field typed, its object types, and
+    * its collections. `manifestSha256` is the hash of its manifest, which the trace's header carries.
+    */
   def header(
     sites:          Seq[SiteLayout],
     objectTypes:    Seq[ObjectTypeInfo],
@@ -190,6 +193,9 @@ private[eventtrace] object CppGen {
   /** The C++ type of an event, from outside `generated`. */
   private def eventRef(e: EventSchema): String = s"generated::${e.subject.fold("")(t => s"$t::")}${e.written}"
 
+  /** An event's struct: the ID of its subject, if it has one, and its fields, each optional where some site leaves it
+    * `Absent`, under a comment naming the sites that emit it.
+    */
   private def eventType(e: EventSchema): String = {
     val subject = e.subject.map(t => s"  unsigned long long subject;  // ID of the $t this event concerns").toSeq
     val members = e.fields.map { f =>
@@ -230,6 +236,9 @@ private[eventtrace] object CppGen {
        |""".stripMargin
   }
 
+  /** The decoder of site `s`'s payload into its event's struct: a transmitted field by shifts and masks, and a
+    * constant as a literal. A field left `Absent` stays unset, and the handler fills in one holding an object ID.
+    */
   private def siteDecoder(e: EventSchema, s: SiteLayout): String = {
     val name = eventRef(e)
     val siteFields = s.fields.map(f => f.name -> f).toMap
@@ -282,8 +291,13 @@ private[eventtrace] object CppGen {
     private val operandIndex = plan.operands.map(_._1).zipWithIndex
     private val bindings = plan.handles.map(h => h.handle.serial -> h.binding).toMap
     private val subject = plan.subject.map(_.handle)
+    /** The subject's variable in the generated code. */
     private def subjectVar = handleVar(subject.get)
 
+    /** The handler's statements, ending with `write`, which writes the record. Each decodes the payload and runs the
+      * tests first; then a create block's handler creates the object, an `iter` handler loops over its view, writing
+      * a record per member, and any other resolves its handles and writes one record.
+      */
     def lines(write: String): Seq[String] = {
       val operands = plan.operands.zipWithIndex.map { case ((op, offset), i) =>
         s"const ${cType(op.tpe)} q$i = ${extract(op.tpe, offset)};  // compared in a query"
@@ -360,6 +374,7 @@ private[eventtrace] object CppGen {
       s"e.$name = ${if (subject.exists(_ eq h)) "e.subject" else s"${handleVar(h)}->id"};"
     }
 
+    /** The calls that stage the site's effects on its subject, in the order written. */
     private def effects: Seq[String] = plan.effects.map {
       case Effect.Add(c, None)      => s"add(rt, ${s.id}, event, c${c.index}_, *$subjectVar);"
       case Effect.Add(c, Some(key)) => s"add(rt, ${s.id}, event, c${c.index}_, *$subjectVar, ${keyCode(key)});"
@@ -404,6 +419,7 @@ private[eventtrace] object CppGen {
       })
     }
 
+    /** C++ for a view's members, in its order, through the collection's members and the `query` helpers. */
     private def viewCode(v: ViewExpr): String = v match {
       case ViewExpr.Source(c) => s"c${c.index}_.members()"
       case ViewExpr.Where(in, m, p) =>
@@ -415,6 +431,7 @@ private[eventtrace] object CppGen {
       case ViewExpr.Youngest(c, k) => s"c${c.index}_.youngest(rt, ${s.id}, ${keyCode(k)})"
     }
 
+    /** C++ for a predicate, with each comparison through its `query` helper. */
     private def predCode(p: Pred): String = p match {
       case Pred.Compare(op, l, r) => s"query::${op.helper}(${operandCode(l)}, ${operandCode(r)})"
       case Pred.And(l, r)         => s"(${predCode(l)} && ${predCode(r)})"
@@ -422,6 +439,7 @@ private[eventtrace] object CppGen {
       case Pred.Not(q)            => s"!${predCode(q)}"
     }
 
+    /** C++ for an operand's value: a handle's field or ID, a literal, or a hardware value decoded into `q<i>`. */
     private def operandCode(o: Operand): String = o match {
       case Operand.Field(h, f)        => s"${handleVar(h)}->${f.name}"
       case Operand.Id(h)              => s"${handleVar(h)}->id"
@@ -438,7 +456,10 @@ private[eventtrace] object CppGen {
       case ViewExpr.Youngest(c, k)     => s"the ${operandText(k, null)} youngest of ${c.name}"
     }
 
+    /** A predicate as diagnostics show it, with `member`'s own fields unqualified. */
     private def predText(p: Pred, member: ObjectType): String = {
+
+      /** A sub-predicate, in parentheses unless it is a single comparison. */
       def nested(q: Pred) = q match {
         case _: Pred.Compare => predText(q, member)
         case _               => s"(${predText(q, member)})"
@@ -451,7 +472,14 @@ private[eventtrace] object CppGen {
       }
     }
 
+    /** An operand as diagnostics show it: a field or ID of `member` bare, another handle's qualified by where the
+      * handle comes from, a literal as its variant or value, and a hardware value by its location.
+      */
     private def operandText(o: Operand, member: ObjectType): String = {
+
+      /** The prefix that qualifies a field or ID of `h`: none for `member`, else where a chooser picked `h`, or
+        * `iter` for an iter member.
+        */
       def of(h: ObjectType) =
         if (h eq member) ""
         else bindings.get(h.serial).orElse(Some(h.binding)) match {
@@ -485,8 +513,12 @@ private[eventtrace] object CppGen {
        |""".stripMargin
   }
 
+  /** The narrowest unsigned fixed-width C++ integer type of at least `width` bits. */
   private def unsignedType(width: Int): String = s"uint${Seq(8, 16, 32, 64).find(_ >= width).get}_t"
 
+  /** A field's C++ type: `unsigned long long` for an ID, the enum class for an enum, `bool`, or the narrowest
+    * fixed-width integer of its signedness.
+    */
   private def cType(t: FieldType): String = {
     require(t.width <= 64, s"a ${t.typeName} field is ${t.width} bits; generated decoders support up to 64")
     if (t.idOf.isDefined) "unsigned long long"
@@ -498,12 +530,14 @@ private[eventtrace] object CppGen {
     }
   }
 
+  /** C++ for a decoded field's value: extracted from the payload, or its constant. */
   private def decode(f: FieldLayout): String = f.source match {
     case Packed(offset)  => extract(f.tpe.get, offset)
     case Constant(value) => constant(f.tpe.get, value)
     case other           => throw new IllegalStateException(s"field ${f.name} is not decoded: $other")
   }
 
+  /** C++ for a literal of type `t`: an enum's variant, `true` or `false`, or an integer cast to the field's type. */
   private def constant(t: FieldType, value: BigInt): String =
     if (t.enumDef.isDefined)
       t.enumDef.get.variants.find(_._2 == value).map(v => s"${cType(t)}::${v._1}").getOrElse(s"${cType(t)}($value)")
@@ -531,8 +565,10 @@ private[eventtrace] object CppGen {
     } else s"${cType(t)}($value)"
   }
 
+  /** `v` as a hexadecimal `unsigned long long` literal. */
   private def hex(v: BigInt): String = s"0x${v.toString(16)}ull"
 
+  /** `s` escaped for a C++ string literal, with control characters as octal escapes. */
   private def cString(s: String): String = s.flatMap {
     case '"'                  => "\\\""
     case '\\'                 => "\\\\"
@@ -540,6 +576,7 @@ private[eventtrace] object CppGen {
     case c                    => c.toString
   }
 
+  /** `s` with each control character a space, so that it stays on its line of a C++ comment. */
   private def commentText(s: String): String = s.map(c => if (c < ' ') ' ' else c)
 
   private val CppKeywords = Set(
