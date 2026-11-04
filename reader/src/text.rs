@@ -16,6 +16,7 @@ pub fn value<'m>(manifest: &'m Manifest, field: &'m FieldSchema, value: Value) -
     Text { manifest, field, value }
 }
 
+/// A field's value, displayed as `value` describes.
 struct Text<'m> {
     manifest: &'m Manifest,
     field: &'m FieldSchema,
@@ -23,6 +24,7 @@ struct Text<'m> {
 }
 
 impl fmt::Display for Text<'_> {
+    /// Writes the value as text, by its field's type.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field = self.field;
         match (field.ty, self.value) {

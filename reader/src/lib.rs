@@ -19,6 +19,7 @@ pub mod proto {
 pub struct Error(pub String);
 
 impl std::fmt::Display for Error {
+    /// Writes the message alone.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
@@ -26,4 +27,5 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// What reading a manifest or a trace gives: its value, or an `Error` naming what went wrong.
 pub type Result<T> = std::result::Result<T, Error>;

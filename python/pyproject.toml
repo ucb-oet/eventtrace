@@ -1,3 +1,4 @@
+# Packaging for the EventTrace Python SDK, which writes traces and their manifests from Python models.
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

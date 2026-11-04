@@ -72,6 +72,7 @@ pub enum Labels {
 }
 
 impl Labels {
+    /// The label's fields, in order; none for no label.
     pub fn fields(&self) -> Vec<&str> {
         match self {
             Labels::None => vec![],
@@ -81,6 +82,7 @@ impl Labels {
     }
 }
 
+/// The `disassemble` entry: the fields holding an instruction's bits and its PC, and the core's ISA string.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disassemble {
@@ -92,6 +94,7 @@ pub struct Disassemble {
 /// Loads a view file's views, each with its object type, in the file's order.
 pub fn load(path: &Path, manifest: &Manifest) -> Result<Vec<View>> {
     let bytes = std::fs::read(path).map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
+    // The error for a file that is not JSON, or not views.
     let not_a_view = |e: serde_json::Error| Error(format!("{} is not a view: {e}", path.display()));
     let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(not_a_view)?;
     let views = if json.is_array() {
@@ -129,6 +132,7 @@ pub fn load(path: &Path, manifest: &Manifest) -> Result<Vec<View>> {
 }
 
 impl Written {
+    /// The view, drawing `object`: the type the file names, or the manifest's only one.
     fn into_view(self, object: String) -> View {
         View {
             object,

@@ -34,6 +34,7 @@ use clap::Parser;
 use eventtrace::objects::Cycles;
 use eventtrace::{Error, Events, Manifest, Result, Value};
 
+/// The command line: the traced runs, the manifest, the plain runs if given, and the tests to check.
 #[derive(Parser)]
 #[command(name = "check_sodor", about = "Checks EventTrace's records of Sodor's five-stage pipeline against Sodor")]
 struct Args {
@@ -82,6 +83,7 @@ fn sodor_retirement(line: &str) -> Option<(u64, u64, u64)> {
     let (pc, rest) = rest.split_once(']')?;
     let (_, inst) = rest.rsplit_once("inst=[")?;
     let (inst, _) = inst.split_once(']')?;
+    // A number in `radix`, or None.
     let number = |s: &str, radix| u64::from_str_radix(s, radix).ok();
     Some((number(cycle, 10)?, number(pc, 16)?, number(inst, 16)?))
 }
@@ -102,6 +104,7 @@ fn replay(manifest: &Manifest, events: Events<impl std::io::Read>, problems: &mu
     let mut live: HashMap<u64, &'static str> = HashMap::new();
     let mut decoded: HashMap<u64, (u64, u64)> = HashMap::new();
     let mut next_id = 0;
+    // An event's unsigned field, by name.
     let unsigned = |e: &eventtrace::Event, field: &str| e.get(manifest, field).and_then(Value::unsigned);
     for cycle in Cycles::new(events) {
         let cycle = cycle?;
@@ -124,6 +127,7 @@ fn replay(manifest: &Manifest, events: Events<impl std::io::Read>, problems: &mu
                 problems.push(format!("cycle {c}: unknown event {name}"));
                 continue;
             };
+            // The stage instruction `id` is in before the edge, or "None".
             let at = |id: u64| live.get(&id).copied().unwrap_or("None");
             if name == "instruction.decode" {
                 if i != next_id {
@@ -173,6 +177,7 @@ fn replay(manifest: &Manifest, events: Events<impl std::io::Read>, problems: &mu
     Ok(replay)
 }
 
+/// Sums over every test, for the summary.
 #[derive(Default)]
 struct Totals {
     cycles: u64,
@@ -185,6 +190,7 @@ struct Totals {
 
 /// Checks one test, printing its line; whether tracing matches Sodor.
 fn check(test: &str, args: &Args, manifest: &Manifest, totals: &mut Totals) -> Result<bool> {
+    // A file's text, or an error naming it.
     let read = |path: PathBuf| std::fs::read_to_string(&path).map_err(|e| Error(format!("cannot read {}: {e}", path.display())));
     let mut problems = Vec::new();
     let out = read(args.traced.join(format!("{test}.out")))?;
@@ -202,6 +208,7 @@ fn check(test: &str, args: &Args, manifest: &Manifest, totals: &mut Totals) -> R
     if ours.retired.len() != sodor.len() {
         problems.push(format!("EventTrace retires {} instructions, Sodor {}", ours.retired.len(), sodor.len()));
     }
+    // EventTrace's retirements paired with Sodor's, in order.
     let pairs = || ours.retired.iter().zip(&sodor);
     if let Some((o, s)) = pairs().find(|(o, s)| (o.1, o.2) != (s.1, s.2)) {
         problems.push(format!("first retirement mismatch: EventTrace (cycle, pc, bits) {o:?}, Sodor {s:?}"));
@@ -232,6 +239,7 @@ fn check(test: &str, args: &Args, manifest: &Manifest, totals: &mut Totals) -> R
     Ok(problems.is_empty())
 }
 
+/// Checks every test and prints the summary; whether tracing matches Sodor in all of them.
 fn run(args: &Args) -> Result<bool> {
     let manifest = Manifest::load(&args.manifest)?;
     let mut totals = Totals::default();
@@ -261,6 +269,7 @@ fn run(args: &Args) -> Result<bool> {
     Ok(ok == args.tests.len())
 }
 
+/// Exits with 0 when every test matches, 1 when one does not, and 2 when a check cannot run.
 fn main() -> ExitCode {
     match run(&Args::parse()) {
         Ok(true) => ExitCode::SUCCESS,

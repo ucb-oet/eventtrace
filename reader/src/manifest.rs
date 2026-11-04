@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{Error, Result};
 
+/// A design's manifest as `load` reads it, with the hash and lookups that `load` derives from it.
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
     pub events: Vec<EventSchema>,
@@ -37,6 +38,8 @@ pub struct Manifest {
     variants: HashMap<String, HashMap<u64, String>>,
 }
 
+/// A counter a native producer declares: its event, which has no subject, the field holding its value, and its key
+/// fields, whose values, with the scope of the site that emits it, pick the counter's track.
 #[derive(Debug, Deserialize)]
 pub struct CounterSchema {
     pub event: String,
@@ -44,12 +47,16 @@ pub struct CounterSchema {
     pub keys: Vec<String>,
 }
 
+/// An object type's instruction labels, from a native producer: the unsigned field that picks one, and each label by
+/// that field's value, in decimal.
 #[derive(Debug, Deserialize)]
 pub struct InstructionText {
     pub field: String,
     pub values: HashMap<String, String>,
 }
 
+/// An event as the manifest declares it: its name, which an event with a subject prefixes with the subject's type, and
+/// its fields in the order a trace gives their values.
 #[derive(Debug, Deserialize)]
 pub struct EventSchema {
     pub name: String,
@@ -66,6 +73,7 @@ impl EventSchema {
     }
 }
 
+/// What an event does to its subject's life; an event without one leaves it alive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Lifecycle {
@@ -95,6 +103,7 @@ pub enum Role {
     BlockedBy,
 }
 
+/// A field of an event or of an object type: its name, its type and width, and what it refers to.
 #[derive(Debug, Deserialize)]
 pub struct FieldSchema {
     pub name: String,
@@ -112,6 +121,7 @@ pub struct FieldSchema {
     pub role: Option<Role>,
 }
 
+/// How often an object type's field may be assigned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Property {
@@ -121,6 +131,7 @@ pub enum Property {
     Mutable,
 }
 
+/// An object type: its name and the fields its objects hold.
 #[derive(Debug, Deserialize)]
 pub struct ObjectSchema {
     pub name: String,
@@ -135,6 +146,7 @@ impl ObjectSchema {
     }
 }
 
+/// A field's type; a Bool, UInt, Enum, or Id is unsigned in the trace, and an SInt signed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum FieldType {
     Bool,
@@ -144,6 +156,7 @@ pub enum FieldType {
     Id,
 }
 
+/// An enum: its name and its variants.
 #[derive(Debug, Deserialize)]
 pub struct EnumSchema {
     pub name: String,
@@ -151,6 +164,7 @@ pub struct EnumSchema {
     pub values: IndexMap<String, u64>,
 }
 
+/// A place in the design that emits one event, which a trace's events name by `site_id`.
 #[derive(Debug, Deserialize)]
 pub struct Site {
     pub site_id: u32,
@@ -165,6 +179,8 @@ pub struct Site {
 }
 
 impl Manifest {
+    /// Reads the manifest at `path`, hashing its bytes and indexing its sites and enums. Fails if the file cannot be
+    /// read, is not a manifest, or has a site emitting an event it does not list.
     pub fn load(path: &Path) -> Result<Manifest> {
         let bytes = std::fs::read(path).map_err(|e| Error(format!("cannot read {}: {e}", path.display())))?;
         let mut manifest: Manifest = serde_json::from_slice(&bytes)

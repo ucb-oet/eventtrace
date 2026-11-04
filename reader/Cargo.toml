@@ -1,3 +1,4 @@
+# The reader: the eventtrace library and command, which read traces with their manifest, and Sodor's checker.
 [package]
 name = "eventtrace"
 version = "0.1.0"

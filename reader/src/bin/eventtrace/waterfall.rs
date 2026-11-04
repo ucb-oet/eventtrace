@@ -54,6 +54,7 @@ struct Texts {
 }
 
 impl Texts {
+    /// The index of `text` in the table, adding it if new.
     fn get(&mut self, text: &str) -> u32 {
         if let Some(&i) = self.index.get(text) {
             return i;
@@ -64,6 +65,7 @@ impl Texts {
     }
 }
 
+/// The arguments of `eventtrace waterfall`: the view, the manifest, the trace, and the file to write.
 #[derive(clap::Args)]
 pub struct Args {
     /// The design's view, such as reader/sodor/view.json
@@ -76,6 +78,7 @@ pub struct Args {
     output: PathBuf,
 }
 
+/// Converts the trace at `args.trace` by the view, writing the waterfall file to `args.output`.
 pub fn run(args: Args) -> Result<()> {
     let manifest = Manifest::load(&args.manifest)?;
     let views = view::load(&args.view, &manifest)?;
@@ -108,6 +111,8 @@ struct Origin<'a> {
     known: HashMap<&'a str, (&'a FieldSchema, Value)>,
 }
 
+/// Converts `events` into one waterfall message titled `title`, written to `out`: the manifest's sites, a type per
+/// view, and a row per object drawn, in parent order, with its stages, events, fields, and label.
 fn convert<W: Write>(
     views: &[View],
     manifest: &Manifest,
@@ -248,6 +253,8 @@ fn convert<W: Write>(
                     Some(Key { object_type: field.object.as_deref()?, id: value.unsigned()? })
                 });
             }
+            // Whether the row shows a field of the create event: not the stage, and a const field if the manifest
+            // lists the type's fields.
             let shown = |name: &str| name != track && d.consts.as_ref().is_none_or(|consts| consts.contains(&name));
             for &(field, value) in fields.iter().filter(|(f, _)| shown(&f.name)) {
                 let name_text = texts.get(&field.name);

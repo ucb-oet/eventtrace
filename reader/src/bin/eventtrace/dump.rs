@@ -7,6 +7,7 @@ use eventtrace::{Events, Manifest, Result, text};
 
 use crate::output;
 
+/// The arguments of `eventtrace dump`: the manifest and the trace to print.
 #[derive(clap::Args)]
 pub struct Args {
     /// The design's manifest, <long name>.eventtrace.json in Chipyard
@@ -15,6 +16,7 @@ pub struct Args {
     trace: PathBuf,
 }
 
+/// Prints every event of the trace to standard output.
 pub fn run(args: Args) -> Result<()> {
     let manifest = Manifest::load(&args.manifest)?;
     let mut out = BufWriter::new(io::stdout().lock());

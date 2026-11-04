@@ -22,6 +22,7 @@ pub struct Cycles<I: Iterator<Item = Result<Event>>> {
 }
 
 impl<I: Iterator<Item = Result<Event>>> Cycles<I> {
+    /// Groups `events`, in the trace's order, into runs of one cycle each.
     pub fn new(events: I) -> Self {
         Cycles { events: events.peekable() }
     }
@@ -30,6 +31,7 @@ impl<I: Iterator<Item = Result<Event>>> Cycles<I> {
 impl<I: Iterator<Item = Result<Event>>> Iterator for Cycles<I> {
     type Item = Result<Cycle>;
 
+    /// The next cycle's events. A read error comes in place of a cycle, after the events before it.
     fn next(&mut self) -> Option<Result<Cycle>> {
         let first = match self.events.next()? {
             Ok(event) => event,
@@ -70,6 +72,7 @@ pub struct Objects<'m> {
 }
 
 impl<'m> Objects<'m> {
+    /// No objects live yet; `manifest` gives each event's subject type and lifecycle.
     pub fn new(manifest: &'m Manifest) -> Self {
         Objects { manifest, live: HashMap::new() }
     }
