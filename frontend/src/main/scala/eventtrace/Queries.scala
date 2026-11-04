@@ -57,7 +57,8 @@ sealed abstract class QueueBase[T <: ObjectType] private[eventtrace] (
     EventTrace.leaving(ViewExpr.Source(info), gen(), s"${info.valName}.clear", sourceInfo)(body)
 }
 
-/** A FIFO declared with [[EventTrace.queue]]: members join at the tail and leave from the head, or all at once.
+/** A FIFO declared with [[EventTrace.queue]]: members join at the tail and leave from the head, all at once, or from
+  * the tail as its youngest members.
   *
   * {{{
   * val fetchBuf = EventTrace.queue(new Insn, entries = 16)
@@ -65,6 +66,7 @@ sealed abstract class QueueBase[T <: ObjectType] private[eventtrace] (
   * val h = fetchBuf.pop()
   * h.event("decode") {}
   * fetchBuf.clear { i => i.event("squash") { i.abort() } }
+  * fetchBuf.dropYoungest(nkill) { i => i.event("squash") { i.abort() } }
   * }}}
   */
 final class Queue[T <: ObjectType] private[eventtrace] (info: CollectionInfo, gen: () => T) extends QueueBase[T](info, gen) {
@@ -72,6 +74,14 @@ final class Queue[T <: ObjectType] private[eventtrace] (info: CollectionInfo, ge
   /** The subject joins the tail when the open event fires. */
   def add(handle: T)(implicit sourceInfo: SourceInfo): Unit =
     EventTrace.effect(Effect.Add(info, None), handle, s"${info.valName}.add", sourceInfo)
+
+  /** The `k` youngest members leave, `k` being the hardware's count of them, as when a squash keeps a queue's older
+    * members. `body` runs as [[clear]]'s does. A `k` above the number of members is a runtime violation.
+    */
+  def dropYoungest(k: UInt)(body: T => Unit)(implicit sourceInfo: SourceInfo): Unit = {
+    val what = s"${info.valName}.dropYoungest"
+    EventTrace.leaving(ViewExpr.Youngest(info, Queries.count(k, what, sourceInfo)), gen(), what, sourceInfo)(body)
+  }
 }
 
 /** A queue whose tail allocates keys, as a reorder buffer's tail allocates tags, declared with [[EventTrace.rob]].
@@ -341,6 +351,9 @@ private[eventtrace] object ViewExpr {
 
   /** A ROB's members from the one with key `key` through the youngest, which a rollback removes. */
   final case class From(collection: CollectionInfo, key: Operand) extends ViewExpr
+
+  /** A queue's `count` youngest members, which dropYoungest removes. */
+  final case class Youngest(collection: CollectionInfo, count: Operand) extends ViewExpr
 }
 
 /** How a handle picks one member of a view. */
@@ -400,7 +413,7 @@ private[eventtrace] object Effect {
   /** The subject, which `pop` returned, leaves the head of a queue or a ROB. */
   final case class Pop(collection: CollectionInfo) extends Effect
 
-  /** The subject leaves a queue or a ROB through the rollback or clear whose block holds the event. */
+  /** The subject leaves a queue or a ROB through the rollback, clear, or dropYoungest whose block holds the event. */
   final case class Drop(collection: CollectionInfo) extends Effect
 
   case object Destroy extends Effect
@@ -503,6 +516,10 @@ private[eventtrace] object Queries {
     operand
   }
 
+  /** A count of members, as `what` passes it: a `UInt` of known width. */
+  def count(k: UInt, what: String, sourceInfo: SourceInfo): Operand =
+    value(FieldType(EventTrace.MaxFieldBits, signed = false, isBool = false, None), k, what, sourceInfo)
+
   /** A handle for the member of a ROB or map with `key`. */
   def byKey[T <: ObjectType](info: CollectionInfo, key: UInt, gen: () => T, sourceInfo: SourceInfo): T = {
     val handle = gen()
@@ -517,6 +534,7 @@ private[eventtrace] object Queries {
     case ViewExpr.Where(in, member, p)   => handles(in) ++ predHandles(p).filterNot(_ eq member)
     case ViewExpr.OrderBy(in, _, _)      => handles(in)
     case ViewExpr.From(_, _)             => Nil
+    case ViewExpr.Youngest(_, _)         => Nil
   }
 
   /** Every hardware value a view compares with. */
@@ -525,6 +543,7 @@ private[eventtrace] object Queries {
     case ViewExpr.Where(in, _, p)  => hardware(in) ++ predOperands(p).collect { case h: Operand.Hardware => h }
     case ViewExpr.OrderBy(in, _, _) => hardware(in)
     case ViewExpr.From(_, key)     => Seq(key).collect { case h: Operand.Hardware => h }
+    case ViewExpr.Youngest(_, k)   => Seq(k).collect { case h: Operand.Hardware => h }
   }
 
   /** The hardware value a chooser looks a member up by, if any. */

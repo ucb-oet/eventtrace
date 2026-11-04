@@ -47,6 +47,10 @@ class Misuse extends Module {
   // A pop and a clear that keep the member alive, so that the only rule they break is removing it twice.
   when (fire(18)) { val h = q.pop(); h.event("deq_keep") {} }
   when (fire(19)) { q.clear { c => c.event("drain") {} } }
+
+  // The youngest one or three members leave.
+  when (fire(20)) { q.dropYoungest(1.U) { c => c.event("trim1") { c.abort() } } }
+  when (fire(21)) { q.dropYoungest(3.U) { c => c.event("trim3") { c.abort() } } }
 }
 
 object MisuseMain extends App {

@@ -1,3 +1,5 @@
+/* Generates the C++ header a simulation compiles: each site's handler, which decodes its payload, resolves its
+ * handles through the tracked collections, checks its rules, and emits its record and effects. */
 package eventtrace
 
 /** Generates the C++ half of the runtime, in three namespaces:
@@ -410,6 +412,7 @@ private[eventtrace] object CppGen {
         s"""query::order_by(rt, ${s.id}, ${viewCode(in)}, [&](objects::${m.typeName}* ${handleVar(m)}) -> const auto& """ +
           s"""{ return ${operandCode(k)}; }, "${cString(describe(in))}", "${cString(operandText(k, m))}")"""
       case ViewExpr.From(c, key) => s"c${c.index}_.from(rt, ${s.id}, ${keyCode(key)})"
+      case ViewExpr.Youngest(c, k) => s"c${c.index}_.youngest(rt, ${s.id}, ${keyCode(k)})"
     }
 
     private def predCode(p: Pred): String = p match {
@@ -432,6 +435,7 @@ private[eventtrace] object CppGen {
       case ViewExpr.Where(in, m, p)    => s"${describe(in)} matching ${predText(p, m)}"
       case ViewExpr.OrderBy(in, m, k)  => s"${describe(in)} ordered by ${operandText(k, m)}"
       case ViewExpr.From(c, key)       => s"${c.name} from key ${operandText(key, null)}"
+      case ViewExpr.Youngest(c, k)     => s"the ${operandText(k, null)} youngest of ${c.name}"
     }
 
     private def predText(p: Pred, member: ObjectType): String = {

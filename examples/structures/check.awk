@@ -9,7 +9,9 @@
 #   dispatch: the fetch queue's head into the ROB's tail and the lowest free slot, unless the queue is empty, the ROB
 #     is full, every slot is busy, or a branch mispredicts. The slot waits ((PC mod 8) xor 5) or (PC bit 3, shifted
 #     to bit 2) cycles: a branch at once for 5 mod 16 and after 4 cycles for 13 mod 16.
-#   fetch: the next PC, unless the fetch queue is full or a branch mispredicts.
+#   jump: a dispatched PC of 14 mod 16, after which the fetch queue's younger entries leave and fetch restarts at
+#     the jump's PC + 3.
+#   fetch: the next PC, unless the fetch queue is full, a branch mispredicts, or a jump dispatches.
 #   mispredict: the ROB's tail moves back to just after the branch, younger operations leave the reservation station,
 #     the fetch queue empties, and fetch restarts at the branch's PC + 1.
 # Records are compared as "edge event PC [mispredict]", naming each object by its PC, since squashed PCs are fetched
@@ -29,7 +31,8 @@ function xor3(a, b,    i, r) {
   return r
 }
 
-function model(steps,    k, s, e, c, exe, slot, pc, tag, misp, head, commit, count, free, disp, dpc, fetch, cut, n, i) {
+function model(steps,    k, s, e, c, exe, slot, pc, tag, misp, head, commit, count, free, disp, dpc, jump, fetch, cut,
+               n, i) {
   next_pc = 0; fq_head = 0; fq_count = 0; rob_head = 0; rob_tail = 0
   for (e = 0; e < 8; e++) rob_valid[e] = 0
   for (s = 0; s < 4; s++) rs_valid[s] = 0
@@ -46,10 +49,15 @@ function model(steps,    k, s, e, c, exe, slot, pc, tag, misp, head, commit, cou
     for (s = 3; s >= 0; s--) if (!rs_valid[s]) free = s
     disp = fq_count > 0 && count != 8 && free >= 0 && !misp
     dpc = fq_pc[fq_head]
-    fetch = fq_count != 4 && !misp
+    jump = disp && dpc % 16 == 14
+    fetch = fq_count != 4 && !misp && !jump
 
     if (fetch) emit(c " insn.fetch " next_pc)
     if (disp) { emit(c " insn.dispatch " dpc); emit(c " uop.dispatch " dpc) }
+    if (jump) {
+      for (i = 1; i < fq_count; i++) emit(c " insn.flush " fq_pc[(fq_head + i) % 4])
+      if (fq_count > 1) jump_drops++; else jumps_alone++
+    }
     if (exe) { emit(c " uop.execute " pc); emit(c " insn.complete " pc " " misp) }
     if (misp) {
       cut = (tag + 1) % 16
@@ -86,6 +94,7 @@ function model(steps,    k, s, e, c, exe, slot, pc, tag, misp, head, commit, cou
       }
       if (fetch) { fq_pc[(fq_head - disp + fq_count + 4) % 4] = next_pc; next_pc++ }
       fq_count += fetch - disp
+      if (jump) { fq_count = 0; next_pc = dpc + 3 }
     }
   }
 }
@@ -141,10 +150,13 @@ END {
   if (!empty_rollbacks) fail("no rollback was to the tail itself, which removes nothing")
   if (!flushes) fail("no flush emptied a fetch queue that held members")
   if (!out_of_order) fail("no operation executed after a younger one")
+  if (!jump_drops) fail("no jump dropped younger fetch-queue entries")
+  if (!jumps_alone) fail("no jump found the fetch queue holding only itself, so that it dropped none")
   if (!fq_full) fail("the fetch queue never filled its 4 entries")
   if (!rs_full) fail("the reservation station never filled its 4 slots")
   if (bad) exit 1
   print "PASS: " ngot " records match the model exactly: " dispatched " dispatches wrapping the ROB's keys, " \
     rollbacks " rollbacks removing members and " empty_rollbacks " to the tail itself, " flushes " fetch-queue " \
-    "flushes, operations finishing out of order, and the fetch queue and reservation station both full at times"
+    "flushes, " jump_drops " jumps dropping younger fetch-queue entries and " jumps_alone " dropping none, " \
+    "operations finishing out of order, and the fetch queue and reservation station both full at times"
 }

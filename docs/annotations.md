@@ -222,7 +222,7 @@ and are shared between modules the same way.
 
 | Kind | Declare | Join | Leave | Find |
 |---|---|---|---|---|
-| Queue | `EventTrace.queue(new T)`, or with `entries = n` | `add(i)` | `pop()`, `clear { i => ... }` | queries |
+| Queue | `EventTrace.queue(new T)`, or with `entries = n` | `add(i)` | `pop()`, `clear { i => ... }`, `dropYoungest(k) { i => ... }` | queries |
 | ROB | `EventTrace.rob(new T, entries = n, keys = k)` | `add(key, i)` | `pop()`, `rollback(newTail) { i => ... }`, `clear { i => ... }` | queries, `rob(key)` |
 | Map | `EventTrace.map(new T, entries = n)` | `add(key, i)` | `remove(i)` | queries, `map(key)` |
 
@@ -230,8 +230,10 @@ A **queue** is a FIFO. `add(i)` joins the tail. `pop()` returns the head, a choo
 with the one event declared on it. The `k`-th of a cycle's pops, counting from 0, is `pop(k)`, which returns member
 `k`, as for a second commit slot: the pops of one cycle must take the first members. `pop` is called outside any
 event block. `clear` removes every member: its block, like an `iter` block, runs with a handle standing for every
-member and must hold exactly one event on it, which carries the removal. A queue declared with `entries` may hold at
-most that many members at the end of a cycle.
+member and must hold exactly one event on it, which carries the removal. `dropYoungest(k)` removes the `k` youngest
+members, `k` being the hardware's count of them, as when a squash keeps a queue's older members. Its block works as
+`clear`'s does, and a `k` above the number of members is a runtime violation. A queue declared with `entries` may hold
+at most that many members at the end of a cycle.
 
 ```scala
 val fetchBuf = EventTrace.queue(new Insn, entries = 4)
@@ -241,6 +243,7 @@ when (decode) {
   i.event("decode") {}
 }
 when (redirect) { fetchBuf.clear { i => i.event("flush") { i.abort() } } }
+when (jump) { fetchBuf.dropYoungest(fetchedAfterJump) { i => i.event("flush") { i.abort() } } }
 ```
 
 A **ROB** is a queue whose tail allocates keys, as a reorder buffer's tail allocates tags. Keys count modulo `keys`,
@@ -404,8 +407,8 @@ Elaboration stops with an error that names the source line when an annotation br
 - effects act only on the event's subject;
 - handles are used only where they are valid, `pop` is called outside event blocks, and the member it returns takes
   exactly one event;
-- events, `iter`, `clear`, `rollback`, and tests do not nest in ways the library does not support, and the block of
-  a `clear` or `rollback` holds exactly one event on its member;
+- events, `iter`, `clear`, `rollback`, `dropYoungest`, and tests do not nest in ways the library does not support,
+  and the block of a `clear`, `rollback`, or `dropYoungest` holds exactly one event on its member;
 - a queue, ROB, or map has at least one entry, a ROB has at least as many keys as entries, and a literal key is below
   them;
 - captures and query values are in the event's module;
@@ -415,7 +418,7 @@ Elaboration stops with an error that names the source line when an annotation br
 
 Some rules depend on the simulation, so the runtime checks them as it handles each cycle:
 
-- a chooser finds the members it needs;
+- a chooser finds the members it needs, and `dropYoungest` as many members as it drops;
 - an object joins a collection only if it is not already a member, and leaves only if it is one;
 - a cycle's pops take a queue's or ROB's first members, and a queue, ROB, or map holds no more than its entries;
 - a ROB's added key is the one its tail allocates next, and a rollback goes to a live key or the tail;

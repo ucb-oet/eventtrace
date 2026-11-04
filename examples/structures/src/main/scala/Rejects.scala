@@ -66,6 +66,9 @@ object Rejects extends App {
     ("rollback whose block has no event", design { (a, _, r, _) =>
       r.rollback(a(2, 0)) { _ => }
     }, "r.rollback's block declares 0 events; it must hold exactly one event on its member"),
+    ("dropYoungest whose block has two events", design { (a, q, _, _) =>
+      q.dropYoungest(a(1, 0)) { c => c.event("r_one") {}; c.event("r_two") {} }
+    }, "q.dropYoungest's block declares 2 events; it must hold exactly one event on its member"),
     ("clear inside an event block", design { (_, q, _, _) =>
       val h = q.head
       h.event("r_outer") { q.clear { c => c.event("r_inner") {} } }

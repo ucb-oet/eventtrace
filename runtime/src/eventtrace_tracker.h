@@ -116,8 +116,8 @@ struct Staged {
   uint64_t key;
 };
 
-// A FIFO: members join at the tail and leave from the head, through pop, or all at once, through clear. With
-// `entries` nonzero, it may hold at most that many members at the end of a cycle.
+// A FIFO: members join at the tail and leave from the head, through pop, all at once, through clear, or from the
+// tail, through dropYoungest. With `entries` nonzero, it may hold at most that many members at the end of a cycle.
 template <class T>
 class Queue : public CollectionBase {
  public:
@@ -125,6 +125,14 @@ class Queue : public CollectionBase {
 
   // The members before the clock edge, oldest first.
   const std::vector<T*>& members() const { return members_; }
+
+  // The `k` youngest members, for dropYoungest(k); a violation if there are fewer.
+  std::vector<T*> youngest(Runtime& rt, unsigned site, uint64_t k) const {
+    if (k > members_.size())
+      rt.violation(site, "dropYoungest(%llu) found only %zu members of %s", static_cast<unsigned long long>(k),
+                   members_.size(), name());
+    return std::vector<T*>(members_.end() - static_cast<std::ptrdiff_t>(k), members_.end());
+  }
 
   void apply(Runtime& rt) override {
     leave(rt);
@@ -136,8 +144,8 @@ class Queue : public CollectionBase {
  protected:
   friend class Effects;
 
-  // Checks that the cycle's pops took the first members, then removes every member that pop, rollback, or clear
-  // takes. Returns the key of the oldest member that rollback or clear removed, if there is one.
+  // Checks that the cycle's pops took the first members, then removes every member that pop, rollback, clear, or
+  // dropYoungest takes. Returns the key of the oldest member that rollback or clear removed, if there is one.
   std::optional<uint64_t> leave(Runtime& rt) {
     const std::size_t pops = pops_.size();
     for (const Staged<T>& p : pops_) {
@@ -407,7 +415,7 @@ class Effects {
     stage_leave(rt, site, event, q, o, q.pops_);
   }
 
-  // o leaves queue or ROB q through rollback or clear, which chose it.
+  // o leaves queue or ROB q through rollback, clear, or dropYoungest, which chose it.
   template <class T>
   void drop(Runtime& rt, unsigned site, unsigned long long event, Queue<T>& q, T& o) {
     stage_leave(rt, site, event, q, o, q.drops_);

@@ -27,7 +27,8 @@ class Uop extends EventTrace.ObjectType("uop") {
   * whose wait has run out executes, so operations finish out of order; and the ROB's head commits once done. A PC of
   * 5 mod 8 is a branch that mispredicts when it executes, at once for 5 mod 16 and after 4 cycles for 13 mod 16: the
   * ROB's tail moves back to just after it, younger operations leave the reservation station, the fetch queue
-  * empties, and fetch restarts after the branch.
+  * empties, and fetch restarts after the branch. A PC of 14 mod 16 is a jump that dispatch resolves: the fetch
+  * queue's younger entries leave, and fetch restarts at the jump's PC + 3.
   */
 class Structures extends Module {
   val io = IO(new Bundle {
@@ -70,9 +71,10 @@ class Structures extends Module {
   val dispSlot = PriorityEncoder(free)
   val dispPc   = fqPc(fqHead)
   val dispatch = fqCount =/= 0.U && robCount =/= 8.U && free.orR && !mispredict
+  val jump     = dispatch && dispPc(3, 0) === 14.U
 
   // Fetch: the next PC into the fetch queue's tail.
-  val fetch = fqCount =/= 4.U && !mispredict
+  val fetch = fqCount =/= 4.U && !mispredict && !jump
 
   for (s <- 0 until 4) when (rsValid(s) && rsWait(s) =/= 0.U) { rsWait(s) := rsWait(s) - 1.U }
   when (exe) {
@@ -109,6 +111,10 @@ class Structures extends Module {
       nextPc := nextPc + 1.U
     }
     fqCount := fqCount + fetch.asUInt - dispatch.asUInt
+    when (jump) {
+      fqCount := 0.U
+      nextPc := dispPc + 3.U
+    }
   }
 
   // ---- Trace
@@ -124,6 +130,9 @@ class Structures extends Module {
     val i = fetchQueue.pop()
     i.event("dispatch") { rob.add(robTail, i) }
     EventTrace.create(new Uop, event = "dispatch") { u => u.pc := dispPc; u.insn := i; station.add(dispSlot, u) }
+  }
+  when (jump) {
+    fetchQueue.dropYoungest(fqCount - 1.U) { i => i.event("flush") { i.abort() } }
   }
   when (exe) {
     val u = station(exeSlot)
